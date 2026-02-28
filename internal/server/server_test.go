@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/macedot/openmodel/internal/api/ollama"
+	"github.com/macedot/openmodel/internal/api/openai"
 	"github.com/macedot/openmodel/internal/config"
 	"github.com/macedot/openmodel/internal/state"
 )
@@ -36,101 +36,10 @@ func TestHandleRoot(t *testing.T) {
 	}
 }
 
-func TestHandleVersion(t *testing.T) {
-	cfg := config.DefaultConfig()
-	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
-	srv := New(cfg, nil, stateMgr)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/version", nil)
-	rec := httptest.NewRecorder()
-
-	srv.handleVersion(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rec.Code)
-	}
-
-	var resp ollama.VersionResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to parse response: %v", err)
-	}
-
-	if resp.Version != "0.1.0" {
-		t.Errorf("expected version '0.1.0', got %q", resp.Version)
-	}
-}
-
-func TestHandleTags(t *testing.T) {
-	cfg := config.DefaultConfig()
-	cfg.Models = map[string][]config.ModelBackend{
-		"test-model": {
-			{Provider: "ollama", Model: "test:latest"},
-		},
-	}
-	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
-	srv := New(cfg, nil, stateMgr)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/tags", nil)
-	rec := httptest.NewRecorder()
-
-	srv.handleTags(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rec.Code)
-	}
-
-	var resp ollama.ListResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to parse response: %v", err)
-	}
-
-	if len(resp.Models) != 1 {
-		t.Errorf("expected 1 model, got %d", len(resp.Models))
-	}
-
-	if resp.Models[0].Name != "test-model" {
-		t.Errorf("expected model name 'test-model', got %q", resp.Models[0].Name)
-	}
-}
-
-func TestHandleChatModelNotFound(t *testing.T) {
-	cfg := config.DefaultConfig()
-	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
-	srv := New(cfg, nil, stateMgr)
-
-	body := `{"model":"nonexistent","messages":[{"role":"user","content":"hi"}]}`
-	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	srv.handleChat(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("expected status 404, got %d", rec.Code)
-	}
-}
-
-func TestHandleGenerateModelNotFound(t *testing.T) {
-	cfg := config.DefaultConfig()
-	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
-	srv := New(cfg, nil, stateMgr)
-
-	body := `{"model":"nonexistent","prompt":"hello"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/generate", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	srv.handleGenerate(rec, req)
-
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("expected status 404, got %d", rec.Code)
-	}
-}
-
 func TestHandleV1Models(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Models = map[string][]config.ModelBackend{
-		"gpt-4": {{Provider: "zen", Model: "gpt-4"}},
+		"gpt-4": {{Backend: "openai", Model: "gpt-4"}},
 	}
 	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
 	srv := New(cfg, nil, stateMgr)
@@ -142,5 +51,77 @@ func TestHandleV1Models(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp openai.ModelList
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if len(resp.Data) != 1 {
+		t.Errorf("expected 1 model, got %d", len(resp.Data))
+	}
+
+	if resp.Data[0].ID != "gpt-4" {
+		t.Errorf("expected model id 'gpt-4', got %q", resp.Data[0].ID)
+	}
+}
+
+func TestHandleV1ModelNotFound(t *testing.T) {
+	cfg := config.DefaultConfig()
+	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
+	srv := New(cfg, nil, stateMgr)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models/nonexistent", nil)
+	rec := httptest.NewRecorder()
+
+	srv.handleV1Model(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", rec.Code)
+	}
+}
+
+func TestHandleV1ModelFound(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Models = map[string][]config.ModelBackend{
+		"gpt-4": {{Backend: "openai", Model: "gpt-4"}},
+	}
+	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
+	srv := New(cfg, nil, stateMgr)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models/gpt-4", nil)
+	rec := httptest.NewRecorder()
+
+	srv.handleV1Model(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+
+	var resp openai.Model
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp.ID != "gpt-4" {
+		t.Errorf("expected model id 'gpt-4', got %q", resp.ID)
+	}
+}
+
+func TestHandleV1ChatCompletionsModelNotFound(t *testing.T) {
+	cfg := config.DefaultConfig()
+	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
+	srv := New(cfg, nil, stateMgr)
+
+	body := strings.NewReader(`{"model":"nonexistent","messages":[{"role":"user","content":"hi"}]}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.handleV1ChatCompletions(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d", rec.Code)
 	}
 }

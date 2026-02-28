@@ -1,31 +1,28 @@
 {
+  "$schema": "https://raw.githubusercontent.com/macedot/openmodel/master/config.schema.json",
   "server": {
     "port": 11435,
     "host": "localhost"
   },
-  "providers": {
-    "ollama": {
-      "type": "ollama",
-      "url": "http://localhost:11434",
-      "models": []
+  "backends": {
+    "local": {
+      "url": "http://localhost:11434/v1",
+      "apiKey": ""
     },
-    "zen": {
-      "type": "opencodezen",
-      "url": "https://api.opencode.ai/v1",
-      "apiKey": "${OPENCODE_API_KEY}",
-      "models": []
+    "openai": {
+      "url": "https://api.openai.com/v1",
+      "apiKey": "${OPENAI_API_KEY}"
     }
   },
   "models": {
-    "glm": [
-      { "provider": "zen", "model": "opencode-go/glm-5" },
-      { "provider": "ollama", "model": "glm-5" }
+    "gpt-4": [
+      { "backend": "openai", "model": "gpt-4" }
     ],
-    "llama3": [
-      { "provider": "ollama", "model": "llama3.2:latest" }
+    "gpt-3.5": [
+      { "backend": "openai", "model": "gpt-3.5-turbo" }
     ],
-    "claude": [
-      { "provider": "zen", "model": "anthropic/claude-3-sonnet" }
+    "llama2": [
+      { "backend": "local", "model": "llama2" }
     ]
   },
   "thresholds": {
@@ -33,5 +30,6 @@
     "initial_timeout_ms": 10000,
     "max_timeout_ms": 300000
   },
-  "log_level": "info"
+  "log_level": "info",
+  "log_format": "text"
 }

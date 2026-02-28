@@ -2,16 +2,15 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/macedot/openmodel/internal/api/ollama"
 	"github.com/macedot/openmodel/internal/api/openai"
+	"github.com/macedot/openmodel/internal/logger"
+	"github.com/macedot/openmodel/internal/provider"
 )
 
 // notImplemented is a helper that returns 501 Not Implemented
@@ -45,316 +44,6 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleVersion handles GET /api/version
-func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(ollama.VersionResponse{Version: "0.1.0"})
-}
-
-// handleTags handles GET /api/tags
-func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var models []ollama.ListModelResponse
-	for modelName := range s.config.Models {
-		models = append(models, ollama.ListModelResponse{
-			Name:       modelName,
-			Model:      modelName,
-			ModifiedAt: time.Now(),
-			Digest:     "openmodel-virtual",
-			Details:    ollama.ModelDetails{Family: "openmodel"},
-		})
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(ollama.ListResponse{Models: models})
-}
-
-// handlePS handles GET /api/ps
-func (s *Server) handlePS(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"models": []interface{}{}})
-}
-
-// handleChat handles POST /api/chat
-func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req ollama.ChatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		handleError(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	// Get the model chain
-	backends, exists := s.config.Models[req.Model]
-	if !exists {
-		handleError(w, fmt.Sprintf("model %q not found", req.Model), http.StatusNotFound)
-		return
-	}
-
-	// Default to streaming
-	stream := true
-	if req.Stream != nil {
-		stream = *req.Stream
-	}
-
-	threshold := s.config.Thresholds.FailuresBeforeSwitch
-	var lastErr error
-
-	for _, backend := range backends {
-		backendKey := fmt.Sprintf("%s/%s", backend.Provider, backend.Model)
-
-		if !s.state.IsAvailable(backendKey, threshold) {
-			continue
-		}
-
-		prov, exists := s.providers[backend.Provider]
-		if !exists {
-			continue
-		}
-
-		if stream {
-			s.streamChatResponse(w, r, prov, backend.Model, backendKey, req.Messages, req.Options, threshold)
-			return
-		}
-
-		resp, err := prov.Chat(r.Context(), backend.Model, req.Messages, req.Options)
-		if err != nil {
-			log.Printf("Chat failed for %s: %v", backendKey, err)
-			lastErr = err
-			s.state.RecordFailure(backendKey, threshold)
-			continue
-		}
-
-		s.state.ResetModel(backendKey)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	// All providers failed
-	s.handleAllProvidersFailed(w, lastErr)
-}
-
-// streamChatResponse streams chat responses in NDJSON format
-func (s *Server) streamChatResponse(w http.ResponseWriter, r *http.Request, prov interface {
-	StreamChat(ctx context.Context, model string, messages []ollama.Message, opts *ollama.Options) (<-chan ollama.ChatResponse, error)
-}, model, backendKey string, messages []ollama.Message, opts *ollama.Options, threshold int) {
-
-	stream, err := prov.StreamChat(r.Context(), model, messages, opts)
-	if err != nil {
-		log.Printf("StreamChat failed for %s: %v", backendKey, err)
-		s.state.RecordFailure(backendKey, threshold)
-		handleError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	flusher, _ := w.(http.Flusher)
-
-	for resp := range stream {
-		data, err := json.Marshal(resp)
-		if err != nil {
-			continue
-		}
-		w.Write(data)
-		w.Write([]byte("\n"))
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-
-	s.state.ResetModel(backendKey)
-}
-
-// handleGenerate handles POST /api/generate
-func (s *Server) handleGenerate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req ollama.GenerateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		handleError(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	backends, exists := s.config.Models[req.Model]
-	if !exists {
-		handleError(w, fmt.Sprintf("model %q not found", req.Model), http.StatusNotFound)
-		return
-	}
-
-	stream := true
-	if req.Stream != nil {
-		stream = *req.Stream
-	}
-
-	threshold := s.config.Thresholds.FailuresBeforeSwitch
-	var lastErr error
-
-	for _, backend := range backends {
-		backendKey := fmt.Sprintf("%s/%s", backend.Provider, backend.Model)
-
-		if !s.state.IsAvailable(backendKey, threshold) {
-			continue
-		}
-
-		prov, exists := s.providers[backend.Provider]
-		if !exists {
-			continue
-		}
-
-		if stream {
-			s.streamGenerateResponse(w, r, prov, backend.Model, backendKey, req.Prompt, req.Options, threshold)
-			return
-		}
-
-		resp, err := prov.Generate(r.Context(), backend.Model, req.Prompt, req.Options)
-		if err != nil {
-			log.Printf("Generate failed for %s: %v", backendKey, err)
-			lastErr = err
-			s.state.RecordFailure(backendKey, threshold)
-			continue
-		}
-
-		s.state.ResetModel(backendKey)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	s.handleAllProvidersFailed(w, lastErr)
-}
-
-// streamGenerateResponse streams generate responses in NDJSON format
-func (s *Server) streamGenerateResponse(w http.ResponseWriter, r *http.Request, prov interface {
-	StreamGenerate(ctx context.Context, model string, prompt string, opts *ollama.Options) (<-chan ollama.GenerateResponse, error)
-}, model, backendKey, prompt string, opts *ollama.Options, threshold int) {
-
-	stream, err := prov.StreamGenerate(r.Context(), model, prompt, opts)
-	if err != nil {
-		log.Printf("StreamGenerate failed for %s: %v", backendKey, err)
-		s.state.RecordFailure(backendKey, threshold)
-		handleError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	flusher, _ := w.(http.Flusher)
-
-	for resp := range stream {
-		data, err := json.Marshal(resp)
-		if err != nil {
-			continue
-		}
-		w.Write(data)
-		w.Write([]byte("\n"))
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-
-	s.state.ResetModel(backendKey)
-}
-
-// handleAllProvidersFailed handles when all providers have failed
-func (s *Server) handleAllProvidersFailed(w http.ResponseWriter, lastErr error) {
-	timeout := s.state.GetProgressiveTimeout()
-	s.state.IncrementTimeout(s.config.Thresholds.MaxTimeout)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Retry-After", fmt.Sprintf("%d", timeout/1000))
-	w.WriteHeader(http.StatusServiceUnavailable)
-
-	errMsg := "all providers failed"
-	if lastErr != nil {
-		errMsg = lastErr.Error()
-	}
-	json.NewEncoder(w).Encode(map[string]string{"error": errMsg})
-}
-
-// handleEmbed handles POST /api/embed
-func (s *Server) handleEmbed(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req ollama.EmbedRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		handleError(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	backends, exists := s.config.Models[req.Model]
-	if !exists {
-		handleError(w, fmt.Sprintf("model %q not found", req.Model), http.StatusNotFound)
-		return
-	}
-
-	threshold := s.config.Thresholds.FailuresBeforeSwitch
-	var lastErr error
-
-	for _, backend := range backends {
-		backendKey := fmt.Sprintf("%s/%s", backend.Provider, backend.Model)
-
-		if !s.state.IsAvailable(backendKey, threshold) {
-			continue
-		}
-
-		prov, exists := s.providers[backend.Provider]
-		if !exists {
-			continue
-		}
-
-		resp, err := prov.Embed(r.Context(), backend.Model, req.Input)
-		if err != nil {
-			log.Printf("Embed failed for %s: %v", backendKey, err)
-			lastErr = err
-			s.state.RecordFailure(backendKey, threshold)
-			continue
-		}
-
-		s.state.ResetModel(backendKey)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-		return
-	}
-
-	s.handleAllProvidersFailed(w, lastErr)
-}
-
-// handleEmbeddings handles POST /api/embeddings
-func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
-	s.handleEmbed(w, r)
-}
-
-// handleShow handles POST /api/show
-func (s *Server) handleShow(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	notImplemented(w, "/api/show")
-}
-
 // handleV1Models handles GET /v1/models
 func (s *Server) handleV1Models(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -374,6 +63,29 @@ func (s *Server) handleV1Models(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleV1Model handles GET /v1/models/{model}
+func (s *Server) handleV1Model(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	modelName := r.URL.Path[len("/v1/models/"):]
+	if modelName == "" {
+		http.Error(w, "model name required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if model exists
+	if _, exists := s.config.Models[modelName]; !exists {
+		http.Error(w, "model not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(openai.NewModel(modelName, "openmodel"))
+}
+
 // handleV1ChatCompletions handles POST /v1/chat/completions
 func (s *Server) handleV1ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -387,48 +99,35 @@ func (s *Server) handleV1ChatCompletions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Get the model chain
 	backends, exists := s.config.Models[req.Model]
 	if !exists {
 		handleError(w, fmt.Sprintf("model %q not found", req.Model), http.StatusNotFound)
 		return
 	}
 
-	// Convert OpenAI messages to Ollama format
-	ollamaMessages := make([]ollama.Message, len(req.Messages))
-	for i, msg := range req.Messages {
-		ollamaMessages[i] = ollama.Message{
-			Role:    msg.Role,
-			Content: msg.Content,
-		}
-	}
-
-	// Convert OpenAI options to Ollama options
-	opts := openaiRequestToOllamaOptions(&req)
-
 	threshold := s.config.Thresholds.FailuresBeforeSwitch
 	var lastErr error
 
 	for _, backend := range backends {
-		backendKey := fmt.Sprintf("%s/%s", backend.Provider, backend.Model)
+		backendKey := fmt.Sprintf("%s/%s", backend.Backend, backend.Model)
 
 		if !s.state.IsAvailable(backendKey, threshold) {
 			continue
 		}
 
-		prov, exists := s.providers[backend.Provider]
+		prov, exists := s.backends[backend.Backend]
 		if !exists {
 			continue
 		}
 
 		if req.Stream {
-			s.streamV1ChatCompletions(w, r, prov, backend.Model, backendKey, req.Model, ollamaMessages, opts, threshold)
+			s.streamV1ChatCompletions(w, r, prov, backend.Model, backendKey, req.Model, req.Messages, &req, threshold)
 			return
 		}
 
-		resp, err := prov.Chat(r.Context(), backend.Model, ollamaMessages, opts)
+		resp, err := prov.Chat(r.Context(), backend.Model, req.Messages, &req)
 		if err != nil {
-			log.Printf("Chat failed for %s: %v", backendKey, err)
+			logger.Error("Chat failed", "backend", backendKey, "error", err)
 			lastErr = err
 			s.state.RecordFailure(backendKey, threshold)
 			continue
@@ -436,68 +135,18 @@ func (s *Server) handleV1ChatCompletions(w http.ResponseWriter, r *http.Request)
 
 		s.state.ResetModel(backendKey)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ollamaChatToOpenAIResponse(resp, req.Model))
+		json.NewEncoder(w).Encode(resp)
 		return
 	}
 
-	// All providers failed
 	s.handleAllProvidersFailed(w, lastErr)
 }
 
-// openaiRequestToOllamaOptions converts OpenAI request options to Ollama options
-func openaiRequestToOllamaOptions(req *openai.ChatCompletionRequest) *ollama.Options {
-	opts := &ollama.Options{}
-	if req.Temperature != nil {
-		opts.Temperature = *req.Temperature
-	}
-	if req.TopP != nil {
-		opts.TopP = *req.TopP
-	}
-	if req.Stop != nil {
-		opts.Stop = req.Stop
-	}
-	return opts
-}
-
-// ollamaChatToOpenAIResponse converts an Ollama chat response to OpenAI format
-func ollamaChatToOpenAIResponse(resp *ollama.ChatResponse, model string) *openai.ChatCompletionResponse {
-	var promptTokens, completionTokens int
-	if resp.Metrics != nil {
-		promptTokens = resp.Metrics.PromptEvalCount
-		completionTokens = resp.Metrics.EvalCount
-	}
-
-	return &openai.ChatCompletionResponse{
-		ID:      "chatcmpl-" + uuid.New().String()[:8],
-		Object:  "chat.completion",
-		Created: time.Now().Unix(),
-		Model:   model,
-		Choices: []openai.ChatCompletionChoice{
-			{
-				Index: 0,
-				Message: &openai.ChatCompletionMessage{
-					Role:    "assistant",
-					Content: resp.Message.Content,
-				},
-				FinishReason: "stop",
-			},
-		},
-		Usage: &openai.Usage{
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			TotalTokens:      promptTokens + completionTokens,
-		},
-	}
-}
-
 // streamV1ChatCompletions streams chat completions in OpenAI SSE format
-func (s *Server) streamV1ChatCompletions(w http.ResponseWriter, r *http.Request, prov interface {
-	StreamChat(ctx context.Context, model string, messages []ollama.Message, opts *ollama.Options) (<-chan ollama.ChatResponse, error)
-}, backendModel, backendKey, requestModel string, messages []ollama.Message, opts *ollama.Options, threshold int) {
-
-	stream, err := prov.StreamChat(r.Context(), backendModel, messages, opts)
+func (s *Server) streamV1ChatCompletions(w http.ResponseWriter, r *http.Request, prov provider.Provider, backendModel, backendKey, requestModel string, messages []openai.ChatCompletionMessage, req *openai.ChatCompletionRequest, threshold int) {
+	stream, err := prov.StreamChat(r.Context(), backendModel, messages, req)
 	if err != nil {
-		log.Printf("StreamChat failed for %s: %v", backendKey, err)
+		logger.Error("StreamChat failed", "backend", backendKey, "error", err)
 		s.state.RecordFailure(backendKey, threshold)
 		handleError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -506,26 +155,30 @@ func (s *Server) streamV1ChatCompletions(w http.ResponseWriter, r *http.Request,
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	flusher, _ := w.(http.Flusher)
 
 	completionID := "chatcmpl-" + uuid.New().String()[:8]
 	created := time.Now().Unix()
 
 	for resp := range stream {
+		choices := make([]openai.ChatCompletionChunkChoice, len(resp.Choices))
+		for i, c := range resp.Choices {
+			choices[i] = openai.ChatCompletionChunkChoice{
+				Index: c.Index,
+				Delta: openai.ChatCompletionDelta{
+					Role:    c.Message.Role,
+					Content: c.Message.Content,
+				},
+				FinishReason: func() *string { s := c.FinishReason; return &s }(),
+			}
+		}
 		chunk := openai.ChatCompletionChunk{
 			ID:      completionID,
 			Object:  "chat.completion.chunk",
 			Created: created,
 			Model:   requestModel,
-			Choices: []openai.ChatCompletionChunkChoice{
-				{
-					Index: 0,
-					Delta: openai.ChatCompletionDelta{
-						Role:    "assistant",
-						Content: resp.Message.Content,
-					},
-				},
-			},
+			Choices: choices,
 		}
 
 		data, err := json.Marshal(chunk)
@@ -540,28 +193,198 @@ func (s *Server) streamV1ChatCompletions(w http.ResponseWriter, r *http.Request,
 		}
 	}
 
-	// Send final chunk with finish_reason
-	finalChunk := openai.ChatCompletionChunk{
-		ID:      completionID,
-		Object:  "chat.completion.chunk",
-		Created: created,
-		Model:   requestModel,
-		Choices: []openai.ChatCompletionChunkChoice{
-			{
-				Index: 0,
-				Delta: openai.ChatCompletionDelta{},
-				FinishReason: func() *string { s := "stop"; return &s }(),
-			},
-		},
-	}
-	finalData, _ := json.Marshal(finalChunk)
-	w.Write([]byte("data: "))
-	w.Write(finalData)
-	w.Write([]byte("\n\n"))
 	w.Write([]byte("data: [DONE]\n\n"))
 	if flusher != nil {
 		flusher.Flush()
 	}
 
 	s.state.ResetModel(backendKey)
+}
+
+// handleV1Completions handles POST /v1/completions
+func (s *Server) handleV1Completions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req openai.CompletionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		handleError(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	backends, exists := s.config.Models[req.Model]
+	if !exists {
+		handleError(w, fmt.Sprintf("model %q not found", req.Model), http.StatusNotFound)
+		return
+	}
+
+	threshold := s.config.Thresholds.FailuresBeforeSwitch
+	var lastErr error
+
+	for _, backend := range backends {
+		backendKey := fmt.Sprintf("%s/%s", backend.Backend, backend.Model)
+
+		if !s.state.IsAvailable(backendKey, threshold) {
+			continue
+		}
+
+		prov, exists := s.backends[backend.Backend]
+		if !exists {
+			continue
+		}
+
+		if req.Stream {
+			s.streamV1Completions(w, r, prov, backend.Model, backendKey, req.Model, &req, threshold)
+			return
+		}
+
+		resp, err := prov.Complete(r.Context(), backend.Model, &req)
+		if err != nil {
+			logger.Error("Complete failed", "backend", backendKey, "error", err)
+			lastErr = err
+			s.state.RecordFailure(backendKey, threshold)
+			continue
+		}
+
+		s.state.ResetModel(backendKey)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	s.handleAllProvidersFailed(w, lastErr)
+}
+
+// streamV1Completions streams completions in SSE format
+func (s *Server) streamV1Completions(w http.ResponseWriter, r *http.Request, prov provider.Provider, backendModel, backendKey, requestModel string, req *openai.CompletionRequest, threshold int) {
+	stream, err := prov.StreamComplete(r.Context(), backendModel, req)
+	if err != nil {
+		logger.Error("StreamComplete failed", "backend", backendKey, "error", err)
+		s.state.RecordFailure(backendKey, threshold)
+		handleError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	flusher, _ := w.(http.Flusher)
+
+	completionID := "cmpl-" + uuid.New().String()[:8]
+	created := time.Now().Unix()
+
+	for resp := range stream {
+		resp.ID = completionID
+		resp.Created = created
+		resp.Model = requestModel
+
+		data, err := json.Marshal(resp)
+		if err != nil {
+			continue
+		}
+		w.Write([]byte("data: "))
+		w.Write(data)
+		w.Write([]byte("\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	w.Write([]byte("data: [DONE]\n\n"))
+	if flusher != nil {
+		flusher.Flush()
+	}
+
+	s.state.ResetModel(backendKey)
+}
+
+// handleV1Embeddings handles POST /v1/embeddings
+func (s *Server) handleV1Embeddings(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req openai.EmbeddingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		handleError(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	backends, exists := s.config.Models[req.Model]
+	if !exists {
+		handleError(w, fmt.Sprintf("model %q not found", req.Model), http.StatusNotFound)
+		return
+	}
+
+	threshold := s.config.Thresholds.FailuresBeforeSwitch
+	var lastErr error
+
+	// Convert input to string slice
+	input := convertInputToSlice(req.Input)
+
+	for _, backend := range backends {
+		backendKey := fmt.Sprintf("%s/%s", backend.Backend, backend.Model)
+
+		if !s.state.IsAvailable(backendKey, threshold) {
+			continue
+		}
+
+		prov, exists := s.backends[backend.Backend]
+		if !exists {
+			continue
+		}
+
+		resp, err := prov.Embed(r.Context(), backend.Model, input)
+		if err != nil {
+			logger.Error("Embed failed", "backend", backendKey, "error", err)
+			lastErr = err
+			s.state.RecordFailure(backendKey, threshold)
+			continue
+		}
+
+		s.state.ResetModel(backendKey)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+		return
+	}
+
+	s.handleAllProvidersFailed(w, lastErr)
+}
+
+// convertInputToSlice converts embedding input to string slice
+func convertInputToSlice(input any) []string {
+	switch v := input.(type) {
+	case string:
+		return []string{v}
+	case []any:
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+// handleAllProvidersFailed handles when all providers have failed
+func (s *Server) handleAllProvidersFailed(w http.ResponseWriter, lastErr error) {
+	timeout := s.state.GetProgressiveTimeout()
+	s.state.IncrementTimeout(s.config.Thresholds.MaxTimeout)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprintf("%d", timeout/1000))
+	w.WriteHeader(http.StatusServiceUnavailable)
+
+	errMsg := "all providers failed"
+	if lastErr != nil {
+		errMsg = lastErr.Error()
+	}
+	json.NewEncoder(w).Encode(map[string]string{"error": errMsg})
 }

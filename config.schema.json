@@ -1,0 +1,105 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://opencode.ai/config.json",
+  "title": "OpenModel Configuration",
+  "description": "Configuration schema for OpenModel server",
+  "type": "object",
+  "required": ["server", "backends", "models"],
+  "properties": {
+    "server": {
+      "type": "object",
+      "description": "Server settings",
+      "required": ["port", "host"],
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 11435,
+          "description": "Port to listen on"
+        },
+        "host": {
+          "type": "string",
+          "default": "localhost",
+          "description": "Host to bind to"
+        }
+      }
+    },
+    "backends": {
+      "type": "object",
+      "description": "Map of backend names to backend configurations",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["url"],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Base URL for the OpenAI-compatible API (e.g., https://api.openai.com/v1 or http://localhost:11434/v1)"
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "API key for authentication. Supports ${VAR} environment variable expansion"
+          }
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "description": "Map of model names to their backend configurations",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["backend", "model"],
+          "properties": {
+            "backend": {
+              "type": "string",
+              "description": "Name of the backend from backends config"
+            },
+            "model": {
+              "type": "string",
+              "description": "Model name on that backend"
+            }
+          }
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "description": "Failure threshold settings",
+      "properties": {
+        "failures_before_switch": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 3,
+          "description": "Number of failures before switching to next backend"
+        },
+        "initial_timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 10000,
+          "description": "Initial timeout in milliseconds"
+        },
+        "max_timeout_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 300000,
+          "description": "Maximum timeout in milliseconds"
+        }
+      }
+    },
+    "log_level": {
+      "type": "string",
+      "enum": ["debug", "info", "warn", "error"],
+      "default": "info",
+      "description": "Logging level"
+    },
+    "log_format": {
+      "type": "string",
+      "enum": ["text", "json"],
+      "default": "text",
+      "description": "Log output format"
+    }
+  }
+}
