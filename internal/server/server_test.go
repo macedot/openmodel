@@ -38,8 +38,8 @@ func TestHandleRoot(t *testing.T) {
 
 func TestHandleV1Models(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Models = map[string][]config.ModelBackend{
-		"gpt-4": {{Backend: "openai", Model: "gpt-4"}},
+	cfg.Models = map[string][]config.ModelProvider{
+		"gpt-4": {{Provider: "openai", Model: "gpt-4"}},
 	}
 	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
 	srv := New(cfg, nil, stateMgr)
@@ -84,8 +84,8 @@ func TestHandleV1ModelNotFound(t *testing.T) {
 
 func TestHandleV1ModelFound(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Models = map[string][]config.ModelBackend{
-		"gpt-4": {{Backend: "openai", Model: "gpt-4"}},
+	cfg.Models = map[string][]config.ModelProvider{
+		"gpt-4": {{Provider: "openai", Model: "gpt-4"}},
 	}
 	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
 	srv := New(cfg, nil, stateMgr)

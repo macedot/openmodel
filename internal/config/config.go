@@ -14,12 +14,12 @@ import (
 
 // Config represents the openmodel configuration
 type Config struct {
-	Server     ServerConfig              `json:"server"`
-	Backends   map[string]BackendConfig  `json:"backends"`
-	Models     map[string][]ModelBackend `json:"models"`
-	LogLevel   string                    `json:"log_level"`
-	LogFormat  string                    `json:"log_format"`
-	Thresholds ThresholdsConfig          `json:"thresholds"`
+	Server     ServerConfig               `json:"server"`
+	Providers  map[string]ProviderConfig  `json:"providers"`
+	Models     map[string][]ModelProvider `json:"models"`
+	LogLevel   string                     `json:"log_level"`
+	LogFormat  string                     `json:"log_format"`
+	Thresholds ThresholdsConfig           `json:"thresholds"`
 }
 
 // ServerConfig holds server settings
@@ -28,16 +28,16 @@ type ServerConfig struct {
 	Host string `json:"host"`
 }
 
-// BackendConfig holds backend connection settings
-type BackendConfig struct {
-	URL    string `json:"url"`    // Base URL for the backend (e.g., https://api.openai.com/v1)
+// ProviderConfig holds provider connection settings
+type ProviderConfig struct {
+	URL    string `json:"url"`    // Base URL for the provider (e.g., https://api.openai.com/v1)
 	APIKey string `json:"apiKey"` // API key (supports ${VAR} expansion)
 }
 
-// ModelBackend represents a backend model in the chain
-type ModelBackend struct {
-	Backend string `json:"backend"` // Backend name from backends config
-	Model   string `json:"model"`   // Model name on that backend
+// ModelProvider represents a provider model in the chain
+type ModelProvider struct {
+	Provider string `json:"provider"` // Provider name from providers config
+	Model    string `json:"model"`    // Model name on that provider
 }
 
 // ThresholdsConfig holds failure threshold settings
@@ -104,7 +104,7 @@ func DefaultConfig() *Config {
 			Port: 11435,
 			Host: "localhost",
 		},
-		Backends: map[string]BackendConfig{
+		Providers: map[string]ProviderConfig{
 			"local": {
 				URL:    "http://localhost:11434/v1",
 				APIKey: "",
@@ -139,10 +139,10 @@ func expandEnvVars(s string) string {
 	return s
 }
 
-// expandBackendEnvVars expands environment variables in backend config
-func expandBackendEnvVars(bc *BackendConfig) {
-	bc.APIKey = expandEnvVars(bc.APIKey)
-	bc.URL = expandEnvVars(bc.URL)
+// expandProviderEnvVars expands environment variables in provider config
+func expandProviderEnvVars(pc *ProviderConfig) {
+	pc.APIKey = expandEnvVars(pc.APIKey)
+	pc.URL = expandEnvVars(pc.URL)
 }
 
 // getConfigPath returns the path to the config file
@@ -229,10 +229,10 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
-	// Expand environment variables in all backend configs
-	for name, backend := range cfg.Backends {
-		expandBackendEnvVars(&backend)
-		cfg.Backends[name] = backend
+	// Expand environment variables in all provider configs
+	for name, provider := range cfg.Providers {
+		expandProviderEnvVars(&provider)
+		cfg.Providers[name] = provider
 	}
 
 	// Allow env vars to override config file values
@@ -258,10 +258,10 @@ func LoadFromPath(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
-	// Expand environment variables in all backend configs
-	for name, backend := range cfg.Backends {
-		expandBackendEnvVars(&backend)
-		cfg.Backends[name] = backend
+	// Expand environment variables in all provider configs
+	for name, provider := range cfg.Providers {
+		expandProviderEnvVars(&provider)
+		cfg.Providers[name] = provider
 	}
 
 	return cfg, nil

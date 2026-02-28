@@ -99,7 +99,7 @@ func (s *Server) handleV1ChatCompletions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	backends, exists := s.config.Models[req.Model]
+	providers, exists := s.config.Models[req.Model]
 	if !exists {
 		handleError(w, fmt.Sprintf("model %q not found", req.Model), http.StatusNotFound)
 		return
@@ -108,32 +108,32 @@ func (s *Server) handleV1ChatCompletions(w http.ResponseWriter, r *http.Request)
 	threshold := s.config.Thresholds.FailuresBeforeSwitch
 	var lastErr error
 
-	for _, backend := range backends {
-		backendKey := fmt.Sprintf("%s/%s", backend.Backend, backend.Model)
+	for _, p := range providers {
+		providerKey := fmt.Sprintf("%s/%s", p.Provider, p.Model)
 
-		if !s.state.IsAvailable(backendKey, threshold) {
+		if !s.state.IsAvailable(providerKey, threshold) {
 			continue
 		}
 
-		prov, exists := s.backends[backend.Backend]
+		prov, exists := s.providers[p.Provider]
 		if !exists {
 			continue
 		}
 
 		if req.Stream {
-			s.streamV1ChatCompletions(w, r, prov, backend.Model, backendKey, req.Model, req.Messages, &req, threshold)
+			s.streamV1ChatCompletions(w, r, prov, p.Model, providerKey, req.Model, req.Messages, &req, threshold)
 			return
 		}
 
-		resp, err := prov.Chat(r.Context(), backend.Model, req.Messages, &req)
+		resp, err := prov.Chat(r.Context(), p.Model, req.Messages, &req)
 		if err != nil {
-			logger.Error("Chat failed", "backend", backendKey, "error", err)
+			logger.Error("Chat failed", "provider", providerKey, "error", err)
 			lastErr = err
-			s.state.RecordFailure(backendKey, threshold)
+			s.state.RecordFailure(providerKey, threshold)
 			continue
 		}
 
-		s.state.ResetModel(backendKey)
+		s.state.ResetModel(providerKey)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 		return
@@ -143,11 +143,11 @@ func (s *Server) handleV1ChatCompletions(w http.ResponseWriter, r *http.Request)
 }
 
 // streamV1ChatCompletions streams chat completions in OpenAI SSE format
-func (s *Server) streamV1ChatCompletions(w http.ResponseWriter, r *http.Request, prov provider.Provider, backendModel, backendKey, requestModel string, messages []openai.ChatCompletionMessage, req *openai.ChatCompletionRequest, threshold int) {
-	stream, err := prov.StreamChat(r.Context(), backendModel, messages, req)
+func (s *Server) streamV1ChatCompletions(w http.ResponseWriter, r *http.Request, prov provider.Provider, providerModel, providerKey, requestModel string, messages []openai.ChatCompletionMessage, req *openai.ChatCompletionRequest, threshold int) {
+	stream, err := prov.StreamChat(r.Context(), providerModel, messages, req)
 	if err != nil {
-		logger.Error("StreamChat failed", "backend", backendKey, "error", err)
-		s.state.RecordFailure(backendKey, threshold)
+		logger.Error("StreamChat failed", "provider", providerKey, "error", err)
+		s.state.RecordFailure(providerKey, threshold)
 		handleError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -198,7 +198,7 @@ func (s *Server) streamV1ChatCompletions(w http.ResponseWriter, r *http.Request,
 		flusher.Flush()
 	}
 
-	s.state.ResetModel(backendKey)
+	s.state.ResetModel(providerKey)
 }
 
 // handleV1Completions handles POST /v1/completions
@@ -214,7 +214,7 @@ func (s *Server) handleV1Completions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	backends, exists := s.config.Models[req.Model]
+	providers, exists := s.config.Models[req.Model]
 	if !exists {
 		handleError(w, fmt.Sprintf("model %q not found", req.Model), http.StatusNotFound)
 		return
@@ -223,32 +223,32 @@ func (s *Server) handleV1Completions(w http.ResponseWriter, r *http.Request) {
 	threshold := s.config.Thresholds.FailuresBeforeSwitch
 	var lastErr error
 
-	for _, backend := range backends {
-		backendKey := fmt.Sprintf("%s/%s", backend.Backend, backend.Model)
+	for _, p := range providers {
+		providerKey := fmt.Sprintf("%s/%s", p.Provider, p.Model)
 
-		if !s.state.IsAvailable(backendKey, threshold) {
+		if !s.state.IsAvailable(providerKey, threshold) {
 			continue
 		}
 
-		prov, exists := s.backends[backend.Backend]
+		prov, exists := s.providers[p.Provider]
 		if !exists {
 			continue
 		}
 
 		if req.Stream {
-			s.streamV1Completions(w, r, prov, backend.Model, backendKey, req.Model, &req, threshold)
+			s.streamV1Completions(w, r, prov, p.Model, providerKey, req.Model, &req, threshold)
 			return
 		}
 
-		resp, err := prov.Complete(r.Context(), backend.Model, &req)
+		resp, err := prov.Complete(r.Context(), p.Model, &req)
 		if err != nil {
-			logger.Error("Complete failed", "backend", backendKey, "error", err)
+			logger.Error("Complete failed", "provider", providerKey, "error", err)
 			lastErr = err
-			s.state.RecordFailure(backendKey, threshold)
+			s.state.RecordFailure(providerKey, threshold)
 			continue
 		}
 
-		s.state.ResetModel(backendKey)
+		s.state.ResetModel(providerKey)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 		return
@@ -258,11 +258,11 @@ func (s *Server) handleV1Completions(w http.ResponseWriter, r *http.Request) {
 }
 
 // streamV1Completions streams completions in SSE format
-func (s *Server) streamV1Completions(w http.ResponseWriter, r *http.Request, prov provider.Provider, backendModel, backendKey, requestModel string, req *openai.CompletionRequest, threshold int) {
-	stream, err := prov.StreamComplete(r.Context(), backendModel, req)
+func (s *Server) streamV1Completions(w http.ResponseWriter, r *http.Request, prov provider.Provider, providerModel, providerKey, requestModel string, req *openai.CompletionRequest, threshold int) {
+	stream, err := prov.StreamComplete(r.Context(), providerModel, req)
 	if err != nil {
-		logger.Error("StreamComplete failed", "backend", backendKey, "error", err)
-		s.state.RecordFailure(backendKey, threshold)
+		logger.Error("StreamComplete failed", "provider", providerKey, "error", err)
+		s.state.RecordFailure(providerKey, threshold)
 		handleError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -298,7 +298,7 @@ func (s *Server) streamV1Completions(w http.ResponseWriter, r *http.Request, pro
 		flusher.Flush()
 	}
 
-	s.state.ResetModel(backendKey)
+	s.state.ResetModel(providerKey)
 }
 
 // handleV1Embeddings handles POST /v1/embeddings
@@ -314,7 +314,7 @@ func (s *Server) handleV1Embeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	backends, exists := s.config.Models[req.Model]
+	providers, exists := s.config.Models[req.Model]
 	if !exists {
 		handleError(w, fmt.Sprintf("model %q not found", req.Model), http.StatusNotFound)
 		return
@@ -326,27 +326,27 @@ func (s *Server) handleV1Embeddings(w http.ResponseWriter, r *http.Request) {
 	// Convert input to string slice
 	input := convertInputToSlice(req.Input)
 
-	for _, backend := range backends {
-		backendKey := fmt.Sprintf("%s/%s", backend.Backend, backend.Model)
+	for _, p := range providers {
+		providerKey := fmt.Sprintf("%s/%s", p.Provider, p.Model)
 
-		if !s.state.IsAvailable(backendKey, threshold) {
+		if !s.state.IsAvailable(providerKey, threshold) {
 			continue
 		}
 
-		prov, exists := s.backends[backend.Backend]
+		prov, exists := s.providers[p.Provider]
 		if !exists {
 			continue
 		}
 
-		resp, err := prov.Embed(r.Context(), backend.Model, input)
+		resp, err := prov.Embed(r.Context(), p.Model, input)
 		if err != nil {
-			logger.Error("Embed failed", "backend", backendKey, "error", err)
+			logger.Error("Embed failed", "provider", providerKey, "error", err)
 			lastErr = err
-			s.state.RecordFailure(backendKey, threshold)
+			s.state.RecordFailure(providerKey, threshold)
 			continue
 		}
 
-		s.state.ResetModel(backendKey)
+		s.state.ResetModel(providerKey)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 		return

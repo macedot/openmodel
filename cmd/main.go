@@ -23,7 +23,7 @@ import (
 
 type TestResult struct {
 	Model    string        `json:"model"`
-	Backend  string        `json:"backend"`
+	Provider string        `json:"provider"`
 	Chat     *MethodResult `json:"chat,omitempty"`
 	Complete *MethodResult `json:"complete,omitempty"`
 	Embed    *MethodResult `json:"embed,omitempty"`
@@ -118,14 +118,14 @@ func runServer() {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
 
-	backends := make(map[string]provider.Provider)
-	for name, bc := range cfg.Backends {
-		backends[name] = provider.NewOpenAIProvider(name, bc.URL, bc.APIKey)
-		logger.Info("Backend initialized", "name", name, "url", bc.URL)
+	providers := make(map[string]provider.Provider)
+	for name, pc := range cfg.Providers {
+		providers[name] = provider.NewOpenAIProvider(name, pc.URL, pc.APIKey)
+		logger.Info("Provider initialized", "name", name, "url", pc.URL)
 	}
 
 	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
-	srv := server.New(cfg, backends, stateMgr)
+	srv := server.New(cfg, providers, stateMgr)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -180,12 +180,12 @@ func runTest(modelName *string, jsonOutput *bool) {
 		os.Exit(1)
 	}
 
-	logger.Info("Initializing backends")
+	logger.Info("Initializing providers")
 
-	backends := make(map[string]provider.Provider)
-	for name, bc := range cfg.Backends {
-		backends[name] = provider.NewOpenAIProvider(name, bc.URL, bc.APIKey)
-		logger.Info("Backend initialized", "name", name, "url", bc.URL)
+	providers := make(map[string]provider.Provider)
+	for name, pc := range cfg.Providers {
+		providers[name] = provider.NewOpenAIProvider(name, pc.URL, pc.APIKey)
+		logger.Info("Provider initialized", "name", name, "url", pc.URL)
 	}
 
 	modelsToTest := getModelsToTest(cfg.Models, *modelName)
@@ -196,7 +196,7 @@ func runTest(modelName *string, jsonOutput *bool) {
 		logger.Info("Testing all configured models")
 	}
 
-	summary := runTests(backends, modelsToTest)
+	summary := runTests(providers, modelsToTest)
 
 	if *jsonOutput {
 		printJSON(summary)
@@ -211,19 +211,19 @@ func runTest(modelName *string, jsonOutput *bool) {
 	}
 }
 
-func getModelsToTest(models map[string][]config.ModelBackend, targetModel string) map[string][]config.ModelBackend {
+func getModelsToTest(models map[string][]config.ModelProvider, targetModel string) map[string][]config.ModelProvider {
 	if targetModel == "" {
 		return models
 	}
 
-	result := make(map[string][]config.ModelBackend)
-	if backends, exists := models[targetModel]; exists {
-		result[targetModel] = backends
+	result := make(map[string][]config.ModelProvider)
+	if providers, exists := models[targetModel]; exists {
+		result[targetModel] = providers
 	}
 	return result
 }
 
-func runTests(backends map[string]provider.Provider, models map[string][]config.ModelBackend) TestSummary {
+func runTests(providers map[string]provider.Provider, models map[string][]config.ModelProvider) TestSummary {
 	summary := TestSummary{
 		Results: make([]TestResult, 0),
 	}
@@ -231,56 +231,56 @@ func runTests(backends map[string]provider.Provider, models map[string][]config.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	for modelName, modelBackends := range models {
+	for modelName, modelProviders := range models {
 		logger.Info("Testing model", "model", modelName)
 
-		for _, backend := range modelBackends {
-			backendKey := fmt.Sprintf("%s/%s", backend.Backend, backend.Model)
+		for _, p := range modelProviders {
+			providerKey := fmt.Sprintf("%s/%s", p.Provider, p.Model)
 			summary.TotalTests++
 
-			logger.Info("Testing backend", "backend", backendKey)
+			logger.Info("Testing provider", "provider", providerKey)
 
 			result := TestResult{
-				Model:   modelName,
-				Backend: backendKey,
+				Model:    modelName,
+				Provider: providerKey,
 			}
 
-			prov, exists := backends[backend.Backend]
+			prov, exists := providers[p.Provider]
 			if !exists {
-				logger.Error("Backend not found", "backend", backend.Backend)
-				result.Chat = &MethodResult{Success: false, Error: "backend not found"}
-				result.Complete = &MethodResult{Success: false, Error: "backend not found"}
-				result.Embed = &MethodResult{Success: false, Error: "backend not found"}
+				logger.Error("Provider not found", "provider", p.Provider)
+				result.Chat = &MethodResult{Success: false, Error: "provider not found"}
+				result.Complete = &MethodResult{Success: false, Error: "provider not found"}
+				result.Embed = &MethodResult{Success: false, Error: "provider not found"}
 				summary.Failed += 3
 				summary.Results = append(summary.Results, result)
 				continue
 			}
 
-			result.Chat = testChat(ctx, prov, backend.Model)
+			result.Chat = testChat(ctx, prov, p.Model)
 			if result.Chat.Success {
 				summary.Passed++
-				logger.Info("Chat test passed", "backend", backendKey, "latency", result.Chat.Latency)
+				logger.Info("Chat test passed", "provider", providerKey, "latency", result.Chat.Latency)
 			} else {
 				summary.Failed++
-				logger.Error("Chat test failed", "backend", backendKey, "error", result.Chat.Error)
+				logger.Error("Chat test failed", "provider", providerKey, "error", result.Chat.Error)
 			}
 
-			result.Complete = testComplete(ctx, prov, backend.Model)
+			result.Complete = testComplete(ctx, prov, p.Model)
 			if result.Complete.Success {
 				summary.Passed++
-				logger.Info("Complete test passed", "backend", backendKey, "latency", result.Complete.Latency)
+				logger.Info("Complete test passed", "provider", providerKey, "latency", result.Complete.Latency)
 			} else {
 				summary.Failed++
-				logger.Error("Complete test failed", "backend", backendKey, "error", result.Complete.Error)
+				logger.Error("Complete test failed", "provider", providerKey, "error", result.Complete.Error)
 			}
 
-			result.Embed = testEmbed(ctx, prov, backend.Model)
+			result.Embed = testEmbed(ctx, prov, p.Model)
 			if result.Embed.Success {
 				summary.Passed++
-				logger.Info("Embed test passed", "backend", backendKey, "latency", result.Embed.Latency)
+				logger.Info("Embed test passed", "provider", providerKey, "latency", result.Embed.Latency)
 			} else {
 				summary.Failed++
-				logger.Error("Embed test failed", "backend", backendKey, "error", result.Embed.Error)
+				logger.Error("Embed test failed", "provider", providerKey, "error", result.Embed.Error)
 			}
 
 			summary.Results = append(summary.Results, result)
@@ -365,7 +365,7 @@ func printText(summary TestSummary) {
 	fmt.Println()
 
 	for _, result := range summary.Results {
-		fmt.Printf("Model: %s | Backend: %s\n", result.Model, result.Backend)
+		fmt.Printf("Model: %s | Provider: %s\n", result.Model, result.Provider)
 		fmt.Println(strings.Repeat("-", 50))
 
 		if result.Chat != nil {

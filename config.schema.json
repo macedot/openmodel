@@ -4,7 +4,7 @@
   "title": "OpenModel Configuration",
   "description": "Configuration schema for OpenModel server",
   "type": "object",
-  "required": ["server", "backends", "models"],
+  "required": ["server", "providers", "models"],
   "properties": {
     "server": {
       "type": "object",
@@ -25,41 +25,40 @@
         }
       }
     },
-    "backends": {
+    "providers": {
       "type": "object",
-      "description": "Map of backend names to backend configurations",
+      "description": "Map of provider names to provider configurations",
       "additionalProperties": {
         "type": "object",
         "required": ["url"],
         "properties": {
           "url": {
             "type": "string",
-            "format": "uri",
-            "description": "Base URL for the OpenAI-compatible API (e.g., https://api.openai.com/v1 or http://localhost:11434/v1)"
+            "description": "Base URL for the OpenAI-compatible API"
           },
           "apiKey": {
             "type": "string",
-            "description": "API key for authentication. Supports ${VAR} environment variable expansion"
+            "description": "API key for authentication"
           }
         }
       }
     },
     "models": {
       "type": "object",
-      "description": "Map of model names to their backend configurations",
+      "description": "Map of model names to their provider configurations",
       "additionalProperties": {
         "type": "array",
         "items": {
           "type": "object",
-          "required": ["backend", "model"],
+          "required": ["provider", "model"],
           "properties": {
-            "backend": {
+            "provider": {
               "type": "string",
-              "description": "Name of the backend from backends config"
+              "description": "Name of the provider from providers config"
             },
             "model": {
               "type": "string",
-              "description": "Model name on that backend"
+              "description": "Model name on that provider"
             }
           }
         }
@@ -73,7 +72,7 @@
           "type": "integer",
           "minimum": 1,
           "default": 3,
-          "description": "Number of failures before switching to next backend"
+          "description": "Number of failures before switching to next provider"
         },
         "initial_timeout_ms": {
           "type": "integer",

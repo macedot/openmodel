@@ -15,17 +15,17 @@ import (
 // Server represents the HTTP server
 type Server struct {
 	config     *config.Config
-	backends   map[string]provider.Provider
+	providers  map[string]provider.Provider
 	state      *state.State
 	httpServer *http.Server
 }
 
-// New creates a new server with the given configuration, backends, and state
-func New(cfg *config.Config, backends map[string]provider.Provider, stateMgr *state.State) *Server {
+// New creates a new server with the given configuration, providers, and state
+func New(cfg *config.Config, providers map[string]provider.Provider, stateMgr *state.State) *Server {
 	return &Server{
-		config:   cfg,
-		backends: backends,
-		state:    stateMgr,
+		config:    cfg,
+		providers: providers,
+		state:     stateMgr,
 	}
 }
 
