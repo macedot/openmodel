@@ -1,0 +1,28 @@
+# Binaries
+*.log
+/openmodel
+
+# IDE files
+.idea/
+*.iml
+.iris
+.vscode
+*.swp
+*.swo
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Test coverage
+*.out
+coverage.html
+
+# Sisyphus evidence (generated)
+.sisyphus/*
+
+# Config files (may contain secrets)
+config.json
+supermodel.json
+*.local.json
+.sisyphus/
