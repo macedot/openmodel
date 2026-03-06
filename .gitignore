@@ -23,3 +23,6 @@ coverage.html
 .opencode
 .worktrees/
 openmodel.json
+
+# Debug files
+.openmodel_debug/

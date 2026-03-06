@@ -42,7 +42,9 @@ func writeSSEChunk(w http.ResponseWriter, flusher http.Flusher, data []byte) err
 	if _, err := w.Write([]byte("\n\n")); err != nil {
 		return err
 	}
-	flusher.Flush()
+	if flusher != nil {
+		flusher.Flush()
+	}
 	return nil
 }
 

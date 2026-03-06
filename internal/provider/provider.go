@@ -10,11 +10,15 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/macedot/openmodel/internal/api/openai"
+	"github.com/macedot/openmodel/internal/logger"
 )
 
 // maxResponseBodySize defines the maximum size of response body to read for error handling
@@ -22,6 +26,31 @@ const maxResponseBodySize = 1024 * 1024 // 1MB
 
 // maxTokenSize defines the maximum token size for streaming buffer
 const maxTokenSize = 1024 * 1024 // 1MB
+
+// debugDir is the directory for saving debug files
+const debugDir = ".openmodel_debug"
+
+// saveDebugFile saves request or response to a debug file
+func saveDebugFile(requestID string, fileType string, content []byte) {
+	// Create debug directory if it doesn't exist
+	if err := os.MkdirAll(debugDir, 0755); err != nil {
+		logger.Trace("Failed to create debug directory", "error", err)
+		return
+	}
+
+	// Generate filename with timestamp and request_id
+	timestamp := time.Now().Format("20060102-150405.000")
+	filename := fmt.Sprintf("%s_%s_%s_%s.json", fileType, timestamp, requestID, uuid.New().String()[:8])
+	filepath := filepath.Join(debugDir, filename)
+
+	// Write content to file
+	if err := os.WriteFile(filepath, content, 0644); err != nil {
+		logger.Trace("Failed to write debug file", "file", filename, "error", err)
+		return
+	}
+
+	logger.Trace("Saved debug file", "type", fileType, "request_id", requestID, "file", filename)
+}
 
 var (
 	// streamBufferPool is a pool for reusing streaming buffers (1MB each)
@@ -32,6 +61,14 @@ var (
 		},
 	}
 )
+
+// getRequestID extracts or generates a request ID for debugging
+func getRequestID(opts *openai.ChatCompletionRequest) string {
+	if opts != nil && opts.User != "" {
+		return opts.User
+	}
+	return uuid.New().String()
+}
 
 // Provider defines the interface for LLM providers
 type Provider interface {
@@ -151,6 +188,33 @@ func copyRequestOptions(src *openai.ChatCompletionRequest, dst *openai.ChatCompl
 	dst.Seed = src.Seed
 	dst.Tools = src.Tools
 	dst.ToolChoice = src.ToolChoice
+	// Copy extra fields for provider-specific parameters
+	if len(src.Extra) > 0 {
+		dst.Extra = make(map[string]any, len(src.Extra))
+		for k, v := range src.Extra {
+			dst.Extra[k] = v
+		}
+	}
+}
+
+// hasThinkingEnabled checks if enable_thinking is set in the request options
+func hasThinkingEnabled(opts *openai.ChatCompletionRequest) bool {
+	if opts == nil || opts.Extra == nil {
+		return false
+	}
+	// Check for enable_thinking field (common in llama.cpp)
+	if v, ok := opts.Extra["enable_thinking"]; ok {
+		if b, ok := v.(bool); ok && b {
+			return true
+		}
+	}
+	// Also check for think field (alternative naming)
+	if v, ok := opts.Extra["think"]; ok {
+		if b, ok := v.(bool); ok && b {
+			return true
+		}
+	}
+	return false
 }
 
 // streamResponse is a generic streaming helper that reads from an HTTP response
@@ -234,6 +298,7 @@ func (p *OpenAIProvider) ListModels(ctx context.Context) (*openai.ModelList, err
 
 // Chat sends a chat completion request
 func (p *OpenAIProvider) Chat(ctx context.Context, model string, messages []openai.ChatCompletionMessage, opts *openai.ChatCompletionRequest) (*openai.ChatCompletionResponse, error) {
+	// Forward request AS IS, only change the model name
 	req := openai.ChatCompletionRequest{
 		Model:    model,
 		Messages: messages,
@@ -244,6 +309,11 @@ func (p *OpenAIProvider) Chat(ctx context.Context, model string, messages []open
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
+
+	// DEBUG: Save request to file
+	requestID := getRequestID(opts)
+	logger.Trace("Chat request", "request_id", requestID, "model", model, "messages_count", len(messages))
+	saveDebugFile(requestID, "request", body)
 
 	httpReq, err := p.buildRequest(body, "/chat/completions")
 	if err != nil {
@@ -265,6 +335,10 @@ func (p *OpenAIProvider) Chat(ctx context.Context, model string, messages []open
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
+	// DEBUG: Save response to file (AS IS)
+	logger.Trace("Chat response", "request_id", requestID, "status", resp.StatusCode, "size", len(respBody))
+	saveDebugFile(requestID, "response", respBody)
+
 	var chatResp openai.ChatCompletionResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w (raw response: %s)", err, string(respBody))
@@ -275,6 +349,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, model string, messages []open
 
 // StreamChat sends a chat request and streams the response
 func (p *OpenAIProvider) StreamChat(ctx context.Context, model string, messages []openai.ChatCompletionMessage, opts *openai.ChatCompletionRequest) (<-chan openai.ChatCompletionResponse, error) {
+	// Forward request AS IS, only change the model name
 	req := openai.ChatCompletionRequest{
 		Model:    model,
 		Messages: messages,
@@ -286,6 +361,11 @@ func (p *OpenAIProvider) StreamChat(ctx context.Context, model string, messages 
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
+	// DEBUG: Save request to file
+	requestID := getRequestID(opts)
+	logger.Trace("StreamChat request", "request_id", requestID, "model", model, "messages_count", len(messages))
+	saveDebugFile(requestID, "request", body)
+
 	httpReq, err := p.buildRequest(body, "/chat/completions")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -295,6 +375,9 @@ func (p *OpenAIProvider) StreamChat(ctx context.Context, model string, messages 
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
+
+	// DEBUG: Log initial response (AS IS)
+	logger.Trace("StreamChat response start", "request_id", requestID, "status", resp.StatusCode)
 
 	if err := p.handleHTTPResponse(resp, true); err != nil {
 		return nil, err

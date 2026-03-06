@@ -122,8 +122,22 @@ func parseModelEntries(cfg *Config, modelName string, entries []any, visited map
 					return nil, fmt.Errorf("invalid model %q: %w", modelName, err)
 				}
 				// Validate provider exists
-				if _, ok := cfg.Providers[mp.Provider]; !ok {
+				provider, ok := cfg.Providers[mp.Provider]
+				if !ok {
 					return nil, fmt.Errorf("model %q references unknown provider %q", modelName, mp.Provider)
+				}
+				// Validate model exists in provider's models list (if models list is defined)
+				if len(provider.Models) > 0 {
+					modelExists := false
+					for _, m := range provider.Models {
+						if m == mp.Model {
+							modelExists = true
+							break
+						}
+					}
+					if !modelExists {
+						return nil, fmt.Errorf("model %q references model %q not found in provider %q's models list", modelName, mp.Model, mp.Provider)
+					}
 				}
 				result = append(result, mp)
 			} else {
@@ -143,8 +157,22 @@ func parseModelEntries(cfg *Config, modelName string, entries []any, visited map
 			if provider == "" || model == "" {
 				return nil, fmt.Errorf("invalid model entry in %q: missing provider or model", modelName)
 			}
-			if _, ok := cfg.Providers[provider]; !ok {
+			providerCfg, ok := cfg.Providers[provider]
+			if !ok {
 				return nil, fmt.Errorf("model %q references unknown provider %q", modelName, provider)
+			}
+			// Validate model exists in provider's models list (if models list is defined)
+			if len(providerCfg.Models) > 0 {
+				modelExists := false
+				for _, m := range providerCfg.Models {
+					if m == model {
+						modelExists = true
+						break
+					}
+				}
+				if !modelExists {
+					return nil, fmt.Errorf("model %q references model %q not found in provider %q's models list", modelName, model, provider)
+				}
 			}
 			result = append(result, ModelProvider{Provider: provider, Model: model})
 
@@ -354,7 +382,7 @@ func getLogFormat() string {
 	if format := os.Getenv("OPENMODEL_LOG_FORMAT"); format != "" {
 		return format
 	}
-	return "text"
+	return "color"
 }
 
 // Load loads configuration from file, merging current directory config with user config
@@ -580,12 +608,6 @@ func parseConfig(data []byte, validateSchema bool) (*Config, error) {
 	// Expand environment variables in all provider configs
 	for name, provider := range cfg.Providers {
 		expandProviderEnvVars(&provider)
-		// Set provider-specific thresholds from provider config
-		if provider.Thresholds != nil {
-			provider.Thresholds.FailuresBeforeSwitch = provider.Thresholds.FailuresBeforeSwitch
-			provider.Thresholds.InitialTimeout = provider.Thresholds.InitialTimeout
-			provider.Thresholds.MaxTimeout = provider.Thresholds.MaxTimeout
-		}
 		cfg.Providers[name] = provider
 	}
 

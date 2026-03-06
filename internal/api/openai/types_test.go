@@ -9,6 +9,133 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestChatCompletionRequest_ExtraFields(t *testing.T) {
+	// Test that extra fields like enable_thinking are preserved through marshal/unmarshal
+	req := ChatCompletionRequest{
+		Model:    "qwen3",
+		Messages: []ChatCompletionMessage{{Role: "user", Content: "Hello"}},
+		Extra: map[string]any{
+			"enable_thinking": true,
+			"think":           "high",
+		},
+	}
+
+	// Marshal to JSON
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	// Verify extra fields are included in JSON
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.Equal(t, true, raw["enable_thinking"], "enable_thinking should be in JSON")
+	assert.Equal(t, "high", raw["think"], "think should be in JSON")
+
+	// Unmarshal back and verify extra fields are preserved
+	var unmarshaled ChatCompletionRequest
+	require.NoError(t, json.Unmarshal(data, &unmarshaled))
+
+	assert.Equal(t, "qwen3", unmarshaled.Model)
+	assert.Len(t, unmarshaled.Messages, 1)
+	assert.Equal(t, true, unmarshaled.Extra["enable_thinking"], "enable_thinking should be preserved")
+	assert.Equal(t, "high", unmarshaled.Extra["think"], "think should be preserved")
+}
+
+func TestChatCompletionRequest_ExtraFields_BackwardCompat(t *testing.T) {
+	// Test that requests without extra fields work (backward compatibility)
+	jsonData := `{"model":"gpt-4","messages":[{"role":"user","content":"test"}]}`
+
+	var req ChatCompletionRequest
+	require.NoError(t, json.Unmarshal([]byte(jsonData), &req))
+
+	assert.Equal(t, "gpt-4", req.Model)
+	assert.Len(t, req.Messages, 1)
+	assert.Equal(t, "user", req.Messages[0].Role)
+	assert.Equal(t, "test", req.Messages[0].Content)
+
+	// Extra should be nil or empty when not provided
+	if req.Extra != nil {
+		assert.Empty(t, req.Extra, "Extra should be empty when not provided in JSON")
+	}
+}
+
+func TestChatCompletionRequest_ExtraFields_RoundTrip(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected map[string]any
+	}{
+		{
+			name:  "enable_thinking boolean",
+			input: `{"model":"qwen3","messages":[],"enable_thinking":true}`,
+			expected: map[string]any{
+				"model":           "qwen3",
+				"messages":        []any{},
+				"enable_thinking": true,
+			},
+		},
+		{
+			name:  "think string",
+			input: `{"model":"gpt-4","messages":[],"think":"high"}`,
+			expected: map[string]any{
+				"model":    "gpt-4",
+				"messages": []any{},
+				"think":    "high",
+			},
+		},
+		{
+			name:  "nested object",
+			input: `{"model":"test","messages":[],"options":{"custom_param":42}}`,
+			expected: map[string]any{
+				"model":    "test",
+				"messages": []any{},
+				"options": map[string]any{
+					"custom_param": 42.0, // JSON numbers are float64
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Unmarshal from JSON
+			var req ChatCompletionRequest
+			require.NoError(t, json.Unmarshal([]byte(tt.input), &req))
+
+			// Marshal back to JSON
+			data, err := json.Marshal(req)
+			require.NoError(t, err)
+
+			// Verify structure
+			var result map[string]any
+			require.NoError(t, json.Unmarshal(data, &result))
+
+			for k, v := range tt.expected {
+				assert.Equal(t, v, result[k], "field %s should match", k)
+			}
+		})
+	}
+}
+
+func TestChatCompletionRequest_ExtraFields_MarshalEmpty(t *testing.T) {
+	// Test marshaling request without extra fields
+	req := ChatCompletionRequest{
+		Model:    "gpt-4",
+		Messages: []ChatCompletionMessage{{Role: "user", Content: "test"}},
+	}
+
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	// Should not have extra fields
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+
+	// Check it only has standard fields
+	assert.Equal(t, "gpt-4", raw["model"])
+	assert.Contains(t, raw, "messages")
+	assert.Len(t, raw, 2, "should only have model and messages")
+}
+
 func TestModel_JSONMarshaling(t *testing.T) {
 	// Test marshaling
 	model := Model{
@@ -102,6 +229,48 @@ func TestChatCompletionMessage_OptionalFields(t *testing.T) {
 	assert.Equal(t, "assistant", msg.Role)
 	assert.Equal(t, "Hello!", msg.Content)
 	assert.Empty(t, msg.Name)
+}
+
+func TestChatCompletionMessage_ThinkingField(t *testing.T) {
+	// Test that thinking field is preserved through marshal/unmarshal
+	msg := ChatCompletionMessage{
+		Role:     "assistant",
+		Content:  "The answer is 42",
+		Thinking: "Let me think about this step by step...",
+	}
+
+	data, err := json.Marshal(msg)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.Equal(t, "assistant", raw["role"])
+	assert.Equal(t, "The answer is 42", raw["content"])
+	assert.Equal(t, "Let me think about this step by step...", raw["thinking"])
+
+	// Unmarshal back
+	var unmarshaled ChatCompletionMessage
+	require.NoError(t, json.Unmarshal(data, &unmarshaled))
+	assert.Equal(t, "assistant", unmarshaled.Role)
+	assert.Equal(t, "The answer is 42", unmarshaled.Content)
+	assert.Equal(t, "Let me think about this step by step...", unmarshaled.Thinking)
+}
+
+func TestChatCompletionMessage_ThinkingField_Empty(t *testing.T) {
+	// Test backward compatibility - empty thinking is omitted
+	msg := ChatCompletionMessage{
+		Role:    "assistant",
+		Content: "Hello",
+	}
+
+	data, err := json.Marshal(msg)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.Equal(t, "assistant", raw["role"])
+	assert.Equal(t, "Hello", raw["content"])
+	assert.NotContains(t, raw, "thinking", "empty thinking should be omitted")
 }
 
 func TestChatCompletionRequest_JSONMarshaling(t *testing.T) {
@@ -614,6 +783,46 @@ func TestChatCompletionDelta_Streaming(t *testing.T) {
 	assert.Equal(t, delta.Content, result.Content)
 }
 
+func TestChatCompletionDelta_ThinkingField(t *testing.T) {
+	// Test that thinking field is preserved in streaming delta
+	delta := ChatCompletionDelta{
+		Role:     "assistant",
+		Content:  "The answer",
+		Thinking: "Reasoning trace",
+	}
+
+	data, err := json.Marshal(delta)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.Equal(t, "assistant", raw["role"])
+	assert.Equal(t, "The answer", raw["content"])
+	assert.Equal(t, "Reasoning trace", raw["thinking"])
+
+	// Unmarshal back
+	var unmarshaled ChatCompletionDelta
+	require.NoError(t, json.Unmarshal(data, &unmarshaled))
+	assert.Equal(t, "assistant", unmarshaled.Role)
+	assert.Equal(t, "The answer", unmarshaled.Content)
+	assert.Equal(t, "Reasoning trace", unmarshaled.Thinking)
+}
+
+func TestChatCompletionDelta_ThinkingField_Empty(t *testing.T) {
+	// Test backward compatibility - empty thinking is omitted
+	delta := ChatCompletionDelta{
+		Role:    "assistant",
+		Content: "Hello",
+	}
+
+	data, err := json.Marshal(delta)
+	require.NoError(t, err)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.NotContains(t, raw, "thinking", "empty thinking should be omitted")
+}
+
 func TestChatToolCallDelta_JSONRoundTrip(t *testing.T) {
 	toolCall := ChatToolCallDelta{
 		Index: 0,
@@ -637,4 +846,83 @@ func TestChatToolCallDelta_JSONRoundTrip(t *testing.T) {
 	assert.Equal(t, "function", result.Type)
 	require.NotNil(t, result.Function)
 	assert.Equal(t, "test_func", result.Function.Name)
+}
+
+func TestChatCompletionChunk_WithThinking(t *testing.T) {
+	// Test that thinking field flows through chunk structure
+	chunkJSON := `{
+		"id": "chatcmpl-123",
+		"object": "chat.completion.chunk",
+		"created": 1234567890,
+		"model": "qwen3",
+		"choices": [
+			{
+				"index": 0,
+				"delta": {
+					"role": "assistant",
+					"thinking": "Let me calculate 17 × 23..."
+				},
+				"finish_reason": null
+			}
+		]
+	}`
+
+	chunk, err := StreamResponseToChunk([]byte(chunkJSON))
+	require.NoError(t, err)
+	assert.Equal(t, "chatcmpl-123", chunk.ID)
+	assert.Len(t, chunk.Choices, 1)
+	assert.Equal(t, 0, chunk.Choices[0].Index)
+	assert.Equal(t, "assistant", chunk.Choices[0].Delta.Role)
+	assert.Equal(t, "Let me calculate 17 × 23...", chunk.Choices[0].Delta.Thinking)
+	assert.Equal(t, "", chunk.Choices[0].Delta.Content)
+}
+
+func TestChatCompletionChunk_WithBothThinkingAndContent(t *testing.T) {
+	// Test chunk that has both thinking and content (later in stream)
+	chunkJSON := `{
+		"id": "chatcmpl-123",
+		"object": "chat.completion.chunk",
+		"created": 1234567890,
+		"model": "qwen3",
+		"choices": [
+			{
+				"index": 0,
+				"delta": {
+					"thinking": "So the answer is",
+					"content": "391"
+				},
+				"finish_reason": null
+			}
+		]
+	}`
+
+	chunk, err := StreamResponseToChunk([]byte(chunkJSON))
+	require.NoError(t, err)
+	assert.Equal(t, "So the answer is", chunk.Choices[0].Delta.Thinking)
+	assert.Equal(t, "391", chunk.Choices[0].Delta.Content)
+}
+
+func TestChatCompletionChunk_WithoutThinking(t *testing.T) {
+	// Test backward compatibility - chunk without thinking field
+	chunkJSON := `{
+		"id": "chatcmpl-123",
+		"object": "chat.completion.chunk",
+		"created": 1234567890,
+		"model": "gpt-4",
+		"choices": [
+			{
+				"index": 0,
+				"delta": {
+					"role": "assistant",
+					"content": "Hello"
+				},
+				"finish_reason": null
+			}
+		]
+	}`
+
+	chunk, err := StreamResponseToChunk([]byte(chunkJSON))
+	require.NoError(t, err)
+	assert.Equal(t, "Hello", chunk.Choices[0].Delta.Content)
+	assert.Equal(t, "", chunk.Choices[0].Delta.Thinking)
 }

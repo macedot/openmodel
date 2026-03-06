@@ -1,15 +1,18 @@
 // Package logger provides structured logging for openmodel.
-// It wraps slog with a simple API and supports both text and JSON formats.
+// It wraps slog with a simple API and supports text, colored text, and JSON formats.
 package logger
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
 	"sync"
+
+	"golang.org/x/term"
 )
 
 var (
@@ -32,12 +35,97 @@ const (
 type Format string
 
 const (
-	FormatJSON Format = "json"
-	FormatText Format = "text"
+	FormatJSON  Format = "json"
+	FormatText  Format = "text"
+	FormatColor Format = "color"
 )
 
 // Custom slog level for trace (lower than debug)
 const slogLevelTrace = slog.Level(-8) // slog.LevelDebug is -4
+
+// ANSI color codes
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorYellow = "\033[33m"
+	colorBlue   = "\033[34m"
+	colorGreen  = "\033[32m"
+	colorGray   = "\033[90m"
+)
+
+// getColorForLevel returns ANSI color code for a log level
+func getColorForLevel(level slog.Level) string {
+	switch {
+	case level >= slog.LevelError:
+		return colorRed
+	case level >= slog.LevelWarn:
+		return colorYellow
+	case level >= slog.LevelInfo:
+		return colorBlue
+	case level >= slog.LevelDebug:
+		return colorGreen
+	default:
+		return colorGray
+	}
+}
+
+// isTerminal returns true if stdout is a terminal
+func isTerminal() bool {
+	return term.IsTerminal(int(os.Stderr.Fd()))
+}
+
+// coloredTextHandler is a custom handler that outputs colored text logs
+type coloredTextHandler struct {
+	opts *slog.HandlerOptions
+	out  io.Writer
+}
+
+func (h *coloredTextHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	if h.opts.Level != nil {
+		return level >= h.opts.Level.Level()
+	}
+	return true
+}
+
+func (h *coloredTextHandler) Handle(ctx context.Context, r slog.Record) error {
+	state := make([]string, 0, 4)
+
+	// Time
+	state = append(state, r.Time.Format("2006-01-02T15:04:05.000-07:00"))
+
+	// Level (colored)
+	levelColor := getColorForLevel(r.Level)
+	state = append(state, fmt.Sprintf("%s%-5s%s", levelColor, r.Level.String(), colorReset))
+
+	// Message
+	state = append(state, r.Message)
+
+	// Attributes
+	r.Attrs(func(a slog.Attr) bool {
+		state = append(state, fmt.Sprintf("%s=%s", a.Key, a.Value.String()))
+		return true
+	})
+
+	// Write output
+	_, err := fmt.Fprintf(h.out, "%s\n", strings.Join(state, " "))
+	return err
+}
+
+func (h *coloredTextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return h
+}
+
+func (h *coloredTextHandler) WithGroup(name string) slog.Handler {
+	return h
+}
+
+// newColoredTextHandler creates a new colored text handler
+func newColoredTextHandler(out io.Writer, opts *slog.HandlerOptions) slog.Handler {
+	return &coloredTextHandler{
+		opts: opts,
+		out:  out,
+	}
+}
 
 func parseLevel(s string) (slog.Level, error) {
 	switch strings.ToLower(s) {
@@ -60,6 +148,8 @@ func parseFormat(s string) Format {
 	switch strings.ToLower(s) {
 	case "json":
 		return FormatJSON
+	case "color":
+		return FormatColor
 	default:
 		return FormatText
 	}
@@ -71,7 +161,7 @@ func getWriter() io.Writer {
 
 // Init initializes the logger with the given level and format.
 // Level can be: trace, debug, info, warn, error
-// Format can be: text, json
+// Format can be: text, color, json
 func Init(level string, format string) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -91,6 +181,8 @@ func Init(level string, format string) error {
 	switch logFormat {
 	case FormatJSON:
 		handler = slog.NewJSONHandler(getWriter(), opts)
+	case FormatColor:
+		handler = newColoredTextHandler(getWriter(), opts)
 	default:
 		handler = slog.NewTextHandler(getWriter(), opts)
 	}

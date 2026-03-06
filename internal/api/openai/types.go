@@ -23,9 +23,10 @@ type ModelList struct {
 
 // ChatCompletionMessage represents a message in a chat completion
 type ChatCompletionMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-	Name    string `json:"name,omitempty"`
+	Role     string `json:"role"`
+	Content  string `json:"content"`
+	Thinking string `json:"thinking,omitempty"`
+	Name     string `json:"name,omitempty"`
 }
 
 // ChatCompletionRequest is sent to /v1/chat/completions
@@ -46,6 +47,7 @@ type ChatCompletionRequest struct {
 	Seed             *int                    `json:"seed,omitempty"`
 	Tools            []Tool                  `json:"tools,omitempty"`
 	ToolChoice       any                     `json:"tool_choice,omitempty"`
+	Extra            map[string]any          `json:"-"` // Provider-specific fields (e.g., enable_thinking)
 }
 
 // ResponseFormat specifies the format of the response
@@ -80,6 +82,7 @@ type ChatCompletionChoice struct {
 type ChatCompletionDelta struct {
 	Role      string              `json:"role,omitempty"`
 	Content   string              `json:"content,omitempty"`
+	Thinking  string              `json:"thinking,omitempty"`
 	ToolCalls []ChatToolCallDelta `json:"tool_calls,omitempty"`
 }
 
@@ -309,4 +312,85 @@ func NewModel(id, ownedBy string) Model {
 		Created: time.Now().Unix(),
 		OwnedBy: ownedBy,
 	}
+}
+
+// MarshalJSON implements custom JSON marshaling to include Extra fields
+func (r ChatCompletionRequest) MarshalJSON() ([]byte, error) {
+	// Create a map to hold all fields
+	type Alias ChatCompletionRequest
+	data, err := json.Marshal(Alias(r))
+	if err != nil {
+		return nil, err
+	}
+
+	// If no extra fields, return as-is
+	if len(r.Extra) == 0 {
+		return data, nil
+	}
+
+	// Unmarshal to map to merge extra fields
+	var reqMap map[string]any
+	if err := json.Unmarshal(data, &reqMap); err != nil {
+		return nil, err
+	}
+
+	// Merge extra fields
+	for k, v := range r.Extra {
+		reqMap[k] = v
+	}
+
+	return json.Marshal(reqMap)
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling to capture unknown fields in Extra
+func (r *ChatCompletionRequest) UnmarshalJSON(data []byte) error {
+	// First, unmarshal into a map to capture all fields
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	// Create an alias to avoid infinite recursion
+	type Alias ChatCompletionRequest
+	var alias Alias
+
+	// Known field names
+	knownFields := map[string]bool{
+		"model":             true,
+		"messages":          true,
+		"temperature":       true,
+		"top_p":             true,
+		"n":                 true,
+		"stream":            true,
+		"stop":              true,
+		"max_tokens":        true,
+		"presence_penalty":  true,
+		"frequency_penalty": true,
+		"logit_bias":        true,
+		"user":              true,
+		"response_format":   true,
+		"seed":              true,
+		"tools":             true,
+		"tool_choice":       true,
+	}
+
+	// Unmarshal known fields
+	aliasData, err := json.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(aliasData, &alias); err != nil {
+		return err
+	}
+
+	// Extract unknown fields into Extra
+	*r = ChatCompletionRequest(alias)
+	r.Extra = make(map[string]any)
+	for k, v := range raw {
+		if !knownFields[k] {
+			r.Extra[k] = v
+		}
+	}
+
+	return nil
 }

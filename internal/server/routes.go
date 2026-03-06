@@ -18,6 +18,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/completions", s.handleV1Completions)
 	mux.HandleFunc("/v1/embeddings", s.handleV1Embeddings)
 	mux.HandleFunc("/v1/moderations", s.handleV1Moderations)
+
+	// Claude Messages API endpoint
+	mux.HandleFunc("/v1/messages", s.handleV1Messages)
 }
 
 // RegisterRoutes registers all HTTP routes on the given mux (exported for testing)

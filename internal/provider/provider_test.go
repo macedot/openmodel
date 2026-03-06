@@ -313,6 +313,69 @@ func TestChat(t *testing.T) {
 	})
 }
 
+func TestChat_ExtraFields(t *testing.T) {
+	t.Run("extra fields passed through", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/chat/completions" {
+				t.Errorf("expected /chat/completions path, got %s", r.URL.Path)
+			}
+
+			var req openai.ChatCompletionRequest
+			body, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(body, &req)
+
+			// Verify extra fields are present in the request
+			if req.Extra == nil {
+				t.Error("expected Extra fields to be present")
+			}
+			if req.Extra["enable_thinking"] != true {
+				t.Errorf("expected enable_thinking=true, got %v", req.Extra["enable_thinking"])
+			}
+			if req.Extra["custom_param"] != "value" {
+				t.Errorf("expected custom_param=value, got %v", req.Extra["custom_param"])
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(openai.ChatCompletionResponse{
+				ID:      "test-id",
+				Object:  "chat.completion",
+				Created: 1234567890,
+				Model:   "gpt-4",
+				Choices: []openai.ChatCompletionChoice{
+					{
+						Index: 0,
+						Message: &openai.ChatCompletionMessage{
+							Role:    "assistant",
+							Content: "Hello!",
+						},
+						FinishReason: "stop",
+					},
+				},
+			})
+		}))
+		defer server.Close()
+
+		provider := newTestProvider(server.URL)
+		ctx := context.Background()
+
+		messages := []openai.ChatCompletionMessage{
+			{Role: "user", Content: "Hello"},
+		}
+
+		opts := &openai.ChatCompletionRequest{
+			Extra: map[string]any{
+				"enable_thinking": true,
+				"custom_param":    "value",
+			},
+		}
+
+		_, err := provider.Chat(ctx, "gpt-4", messages, opts)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
 func TestStreamChat(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -643,6 +706,76 @@ func TestStreamChat(t *testing.T) {
 			t.Errorf("expected at most 1 chunk, got %d", receivedCount)
 		}
 	})
+}
+
+func TestStreamChat_WithThinkingField(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req openai.ChatCompletionRequest
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+
+		if !req.Stream {
+			t.Error("expected streaming request")
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Transfer-Encoding", "chunked")
+
+		streamData := []string{
+			`data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"qwen3","choices":[{"index":0,"delta":{"role":"assistant","thinking":"Let me think..."},"finish_reason":null}]}`,
+			`data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"qwen3","choices":[{"index":0,"delta":{"thinking":" calculating..."},"finish_reason":null}]}`,
+			`data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"qwen3","choices":[{"index":0,"delta":{"content":"391"},"finish_reason":null}]}`,
+			`data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"qwen3","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`,
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("expected http.Flusher")
+		}
+
+		for _, data := range streamData {
+			w.Write([]byte(data + "\n"))
+			flusher.Flush()
+		}
+	}))
+	defer server.Close()
+
+	provider := newTestProvider(server.URL)
+	ctx := context.Background()
+
+	messages := []openai.ChatCompletionMessage{
+		{Role: "user", Content: "What is 17 × 23?"},
+	}
+
+	ch, err := provider.StreamChat(ctx, "qwen3", messages, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var chunks []openai.ChatCompletionResponse
+	for resp := range ch {
+		chunks = append(chunks, resp)
+	}
+
+	if len(chunks) != 4 {
+		t.Errorf("expected 4 chunks, got %d", len(chunks))
+	}
+
+	// Verify thinking in first chunk
+	if chunks[0].Choices[0].Delta.Thinking != "Let me think..." {
+		t.Errorf("expected thinking in first chunk, got %q", chunks[0].Choices[0].Delta.Thinking)
+	}
+
+	// Verify thinking in second chunk
+	if chunks[1].Choices[0].Delta.Thinking != " calculating..." {
+		t.Errorf("expected thinking in second chunk, got %q", chunks[1].Choices[0].Delta.Thinking)
+	}
+
+	// Verify content in third chunk
+	if chunks[2].Choices[0].Delta.Content != "391" {
+		t.Errorf("expected content in third chunk, got %q", chunks[2].Choices[0].Delta.Content)
+	}
 }
 
 func TestComplete(t *testing.T) {

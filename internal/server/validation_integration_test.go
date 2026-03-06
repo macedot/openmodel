@@ -24,6 +24,11 @@ func TestValidateChatCompletionRequest_Integration(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
+			name:       "valid request with extra fields",
+			body:       `{"model":"test-model","messages":[{"role":"user","content":"Hello"}],"enable_thinking":true,"think":"high"}`,
+			wantStatus: http.StatusOK,
+		},
+		{
 			name:       "missing model",
 			body:       `{"messages":[{"role":"user","content":"Hello"}]}`,
 			wantStatus: http.StatusBadRequest,

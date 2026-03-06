@@ -198,9 +198,9 @@
     },
     "log_format": {
       "type": "string",
-      "enum": ["text", "json"],
-      "default": "text",
-      "description": "Log output format"
+      "enum": ["text", "color", "json"],
+      "default": "color",
+      "description": "Log output format (color for colored terminal output)"
     }
   }
 }

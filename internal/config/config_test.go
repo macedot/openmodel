@@ -72,6 +72,17 @@ func TestDefaultConfig(t *testing.T) {
 			t.Errorf("expected log format json, got %s", cfg.LogFormat)
 		}
 	})
+
+	t.Run("log format default is color", func(t *testing.T) {
+		orig := os.Getenv("OPENMODEL_LOG_FORMAT")
+		defer os.Setenv("OPENMODEL_LOG_FORMAT", orig)
+
+		os.Unsetenv("OPENMODEL_LOG_FORMAT")
+		cfg := DefaultConfig()
+		if cfg.LogFormat != "color" {
+			t.Errorf("expected default log format color, got %s", cfg.LogFormat)
+		}
+	})
 }
 
 // TestExpandEnvVars tests the expandEnvVars function
@@ -414,8 +425,8 @@ func TestGetLogFormat(t *testing.T) {
 	t.Run("default when not set", func(t *testing.T) {
 		os.Unsetenv("OPENMODEL_LOG_FORMAT")
 		format := getLogFormat()
-		if format != "text" {
-			t.Errorf("getLogFormat() = %q, want text", format)
+		if format != "color" {
+			t.Errorf("getLogFormat() = %q, want color", format)
 		}
 	})
 }
@@ -607,4 +618,270 @@ func BenchmarkDefaultConfig(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_ = DefaultConfig()
 	}
+}
+
+// TestModelValidation tests model reference validation
+func TestModelValidation(t *testing.T) {
+	t.Run("valid provider/model format", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.json")
+		configContent := `{
+			"$schema": "http://json-schema.org/draft-07/schema#",
+			"server": {"port": 12345, "host": "localhost"},
+			"providers": {
+				"test": {
+					"url": "http://localhost:8080/v1",
+					"models": ["model1", "model2"]
+				}
+			},
+			"models": {
+				"my-model": {
+					"strategy": "fallback",
+					"providers": ["test/model1"]
+				}
+			},
+			"log_level": "info",
+			"log_format": "text",
+			"thresholds": {"failures_before_switch": 3, "initial_timeout_ms": 10000, "max_timeout_ms": 300000}
+		}`
+
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("failed to write temp config: %v", err)
+		}
+
+		cfg, err := LoadFromPath(configPath)
+		assert.NoError(t, err)
+		assert.Len(t, cfg.Models["my-model"].Providers, 1)
+		assert.Equal(t, "test", cfg.Models["my-model"].Providers[0].Provider)
+		assert.Equal(t, "model1", cfg.Models["my-model"].Providers[0].Model)
+	})
+
+	t.Run("invalid provider reference", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.json")
+		configContent := `{
+			"$schema": "http://json-schema.org/draft-07/schema#",
+			"server": {"port": 12345, "host": "localhost"},
+			"providers": {
+				"test": {
+					"url": "http://localhost:8080/v1",
+					"models": ["model1"]
+				}
+			},
+			"models": {
+				"my-model": {
+					"strategy": "fallback",
+					"providers": ["unknown/model1"]
+				}
+			},
+			"log_level": "info",
+			"log_format": "text",
+			"thresholds": {"failures_before_switch": 3, "initial_timeout_ms": 10000, "max_timeout_ms": 300000}
+		}`
+
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("failed to write temp config: %v", err)
+		}
+
+		_, err := LoadFromPath(configPath)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown provider")
+	})
+
+	t.Run("invalid model reference in provider list", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.json")
+		configContent := `{
+			"$schema": "http://json-schema.org/draft-07/schema#",
+			"server": {"port": 12345, "host": "localhost"},
+			"providers": {
+				"test": {
+					"url": "http://localhost:8080/v1",
+					"models": ["model1", "model2"]
+				}
+			},
+			"models": {
+				"my-model": {
+					"strategy": "fallback",
+					"providers": ["test/nonexistent"]
+				}
+			},
+			"log_level": "info",
+			"log_format": "text",
+			"thresholds": {"failures_before_switch": 3, "initial_timeout_ms": 10000, "max_timeout_ms": 300000}
+		}`
+
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("failed to write temp config: %v", err)
+		}
+
+		_, err := LoadFromPath(configPath)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not found in provider")
+	})
+
+	t.Run("valid own model reference", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.json")
+		configContent := `{
+			"$schema": "http://json-schema.org/draft-07/schema#",
+			"server": {"port": 12345, "host": "localhost"},
+			"providers": {
+				"test": {
+					"url": "http://localhost:8080/v1",
+					"models": ["model1", "model2"]
+				}
+			},
+			"models": {
+				"my-model": {
+					"strategy": "fallback",
+					"providers": ["model1"]
+				}
+			},
+			"log_level": "info",
+			"log_format": "text",
+			"thresholds": {"failures_before_switch": 3, "initial_timeout_ms": 10000, "max_timeout_ms": 300000}
+		}`
+
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("failed to write temp config: %v", err)
+		}
+
+		cfg, err := LoadFromPath(configPath)
+		assert.NoError(t, err)
+		assert.Len(t, cfg.Models["my-model"].Providers, 1)
+		assert.Equal(t, "test", cfg.Models["my-model"].Providers[0].Provider)
+		assert.Equal(t, "model1", cfg.Models["my-model"].Providers[0].Model)
+	})
+
+	t.Run("invalid own model reference", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.json")
+		configContent := `{
+			"$schema": "http://json-schema.org/draft-07/schema#",
+			"server": {"port": 12345, "host": "localhost"},
+			"providers": {
+				"test": {
+					"url": "http://localhost:8080/v1",
+					"models": ["model1", "model2"]
+				}
+			},
+			"models": {
+				"my-model": {
+					"strategy": "fallback",
+					"providers": ["nonexistent"]
+				}
+			},
+			"log_level": "info",
+			"log_format": "text",
+			"thresholds": {"failures_before_switch": 3, "initial_timeout_ms": 10000, "max_timeout_ms": 300000}
+		}`
+
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("failed to write temp config: %v", err)
+		}
+
+		_, err := LoadFromPath(configPath)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not found in any provider's models list")
+	})
+
+	t.Run("provider/model without models list definition passes", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.json")
+		configContent := `{
+			"$schema": "http://json-schema.org/draft-07/schema#",
+			"server": {"port": 12345, "host": "localhost"},
+			"providers": {
+				"test": {
+					"url": "http://localhost:8080/v1"
+				}
+			},
+			"models": {
+				"my-model": {
+					"strategy": "fallback",
+					"providers": ["test/any-model"]
+				}
+			},
+			"log_level": "info",
+			"log_format": "text",
+			"thresholds": {"failures_before_switch": 3, "initial_timeout_ms": 10000, "max_timeout_ms": 300000}
+		}`
+
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("failed to write temp config: %v", err)
+		}
+
+		cfg, err := LoadFromPath(configPath)
+		assert.NoError(t, err)
+		assert.Len(t, cfg.Models["my-model"].Providers, 1)
+		assert.Equal(t, "test", cfg.Models["my-model"].Providers[0].Provider)
+		assert.Equal(t, "any-model", cfg.Models["my-model"].Providers[0].Model)
+	})
+
+	t.Run("valid object format model reference", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.json")
+		configContent := `{
+			"$schema": "http://json-schema.org/draft-07/schema#",
+			"server": {"port": 12345, "host": "localhost"},
+			"providers": {
+				"test": {
+					"url": "http://localhost:8080/v1",
+					"models": ["model1"]
+				}
+			},
+			"models": {
+				"my-model": {
+					"strategy": "fallback",
+					"providers": [{"provider": "test", "model": "model1"}]
+				}
+			},
+			"log_level": "info",
+			"log_format": "text",
+			"thresholds": {"failures_before_switch": 3, "initial_timeout_ms": 10000, "max_timeout_ms": 300000}
+		}`
+
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("failed to write temp config: %v", err)
+		}
+
+		cfg, err := LoadFromPath(configPath)
+		assert.NoError(t, err)
+		assert.Len(t, cfg.Models["my-model"].Providers, 1)
+		assert.Equal(t, "test", cfg.Models["my-model"].Providers[0].Provider)
+		assert.Equal(t, "model1", cfg.Models["my-model"].Providers[0].Model)
+	})
+
+	t.Run("invalid object format model reference", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.json")
+		configContent := `{
+			"$schema": "http://json-schema.org/draft-07/schema#",
+			"server": {"port": 12345, "host": "localhost"},
+			"providers": {
+				"test": {
+					"url": "http://localhost:8080/v1",
+					"models": ["model1"]
+				}
+			},
+			"models": {
+				"my-model": {
+					"strategy": "fallback",
+					"providers": [{"provider": "test", "model": "nonexistent"}]
+				}
+			},
+			"log_level": "info",
+			"log_format": "text",
+			"thresholds": {"failures_before_switch": 3, "initial_timeout_ms": 10000, "max_timeout_ms": 300000}
+		}`
+
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("failed to write temp config: %v", err)
+		}
+
+		_, err := LoadFromPath(configPath)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not found in provider")
+	})
 }

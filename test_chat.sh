@@ -1,7 +1,7 @@
 #!/bin/bash
 # Test script for chat completions endpoint
-
-time curl -v -s http://127.0.0.1:12345/v1/chat/completions \
+PORT=${PORT:-12345}
+time curl -v -s http://127.0.0.1:${PORT}/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "smart",

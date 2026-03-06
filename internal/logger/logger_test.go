@@ -53,6 +53,8 @@ func TestParseFormat(t *testing.T) {
 		{"JSON", FormatJSON},
 		{"text", FormatText},
 		{"TEXT", FormatText},
+		{"color", FormatColor},
+		{"COLOR", FormatColor},
 		{"", FormatText},
 		{"unknown", FormatText},
 	}
@@ -93,6 +95,13 @@ func TestInit(t *testing.T) {
 
 	t.Run("text format", func(t *testing.T) {
 		err := Init("info", "text")
+		if err != nil {
+			t.Errorf("Init() error = %v", err)
+		}
+	})
+
+	t.Run("color format", func(t *testing.T) {
+		err := Init("info", "color")
 		if err != nil {
 			t.Errorf("Init() error = %v", err)
 		}
@@ -230,7 +239,7 @@ func BenchmarkParseLevel(b *testing.B) {
 
 // BenchmarkParseFormat benchmarks parseFormat
 func BenchmarkParseFormat(b *testing.B) {
-	formats := []string{"json", "text", "JSON", "TEXT"}
+	formats := []string{"json", "text", "color", "JSON", "TEXT", "COLOR"}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		for _, format := range formats {
