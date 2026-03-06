@@ -14,7 +14,7 @@ func TestFindProviderWithFailover(t *testing.T) {
 	tests := []struct {
 		name            string
 		model           string
-		modelsConfig    map[string][]config.ModelProvider
+		modelsConfig    map[string]config.ModelConfig
 		providers       map[string]provider.Provider
 		failures        map[string]int
 		wantErr         bool
@@ -25,8 +25,8 @@ func TestFindProviderWithFailover(t *testing.T) {
 		{
 			name:  "model exists and provider available",
 			model: "gpt-4",
-			modelsConfig: map[string][]config.ModelProvider{
-				"gpt-4": {{Provider: "openai", Model: "gpt-4"}},
+			modelsConfig: map[string]config.ModelConfig{
+				"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "openai", Model: "gpt-4"}}},
 			},
 			providers: map[string]provider.Provider{
 				"openai": &mockProvider{nameVal: "openai"},
@@ -39,20 +39,20 @@ func TestFindProviderWithFailover(t *testing.T) {
 		{
 			name:  "model exists but no providers available due to failures",
 			model: "gpt-4",
-			modelsConfig: map[string][]config.ModelProvider{
-				"gpt-4": {{Provider: "openai", Model: "gpt-4"}},
+			modelsConfig: map[string]config.ModelConfig{
+				"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "openai", Model: "gpt-4"}}},
 			},
 			providers: map[string]provider.Provider{
 				"openai": &mockProvider{nameVal: "openai"},
 			},
-			failures:    map[string]int{"openai/gpt-4": 10}, // Exceeds threshold of 3
+			failures:    map[string]int{"openai/gpt-4": 10},
 			wantErr:     true,
 			errContains: "no available providers",
 		},
 		{
 			name:         "model not found",
 			model:        "nonexistent",
-			modelsConfig: map[string][]config.ModelProvider{},
+			modelsConfig: map[string]config.ModelConfig{},
 			providers: map[string]provider.Provider{
 				"openai": &mockProvider{nameVal: "openai"},
 			},
@@ -63,17 +63,17 @@ func TestFindProviderWithFailover(t *testing.T) {
 		{
 			name:  "multiple providers first unavailable",
 			model: "gpt-4",
-			modelsConfig: map[string][]config.ModelProvider{
-				"gpt-4": {
+			modelsConfig: map[string]config.ModelConfig{
+				"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{
 					{Provider: "openai", Model: "gpt-4"},
 					{Provider: "ollama", Model: "llama-2"},
-				},
+				}},
 			},
 			providers: map[string]provider.Provider{
 				"openai": &mockProvider{nameVal: "openai"},
 				"ollama": &mockProvider{nameVal: "ollama"},
 			},
-			failures:        map[string]int{"openai/gpt-4": 10}, // First provider failed
+			failures:        map[string]int{"openai/gpt-4": 10},
 			wantErr:         false,
 			wantProviderKey: "ollama/llama-2",
 			wantModel:       "llama-2",
@@ -81,8 +81,8 @@ func TestFindProviderWithFailover(t *testing.T) {
 		{
 			name:  "provider not in providers map",
 			model: "gpt-4",
-			modelsConfig: map[string][]config.ModelProvider{
-				"gpt-4": {{Provider: "openai", Model: "gpt-4"}},
+			modelsConfig: map[string]config.ModelConfig{
+				"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "openai", Model: "gpt-4"}}},
 			},
 			providers:   map[string]provider.Provider{},
 			failures:    map[string]int{},
@@ -106,7 +106,7 @@ func TestFindProviderWithFailover(t *testing.T) {
 
 			srv := New(cfg, tt.providers, stateMgr)
 
-			_, providerKey, providerModel, err := srv.findProviderWithFailover(tt.model, cfg.Thresholds.FailuresBeforeSwitch)
+			_, providerKey, providerModel, err := srv.findProviderWithFailover(tt.model, "")
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -124,7 +124,7 @@ func TestFindAllAvailableProviders(t *testing.T) {
 	tests := []struct {
 		name         string
 		model        string
-		modelsConfig map[string][]config.ModelProvider
+		modelsConfig map[string]config.ModelConfig
 		providers    map[string]provider.Provider
 		failures     map[string]int
 		wantCount    int
@@ -132,11 +132,11 @@ func TestFindAllAvailableProviders(t *testing.T) {
 		{
 			name:  "all providers available",
 			model: "gpt-4",
-			modelsConfig: map[string][]config.ModelProvider{
-				"gpt-4": {
+			modelsConfig: map[string]config.ModelConfig{
+				"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{
 					{Provider: "openai", Model: "gpt-4"},
 					{Provider: "ollama", Model: "llama-2"},
-				},
+				}},
 			},
 			providers: map[string]provider.Provider{
 				"openai": &mockProvider{nameVal: "openai"},
@@ -148,11 +148,11 @@ func TestFindAllAvailableProviders(t *testing.T) {
 		{
 			name:  "some providers marked unavailable",
 			model: "gpt-4",
-			modelsConfig: map[string][]config.ModelProvider{
-				"gpt-4": {
+			modelsConfig: map[string]config.ModelConfig{
+				"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{
 					{Provider: "openai", Model: "gpt-4"},
 					{Provider: "ollama", Model: "llama-2"},
-				},
+				}},
 			},
 			providers: map[string]provider.Provider{
 				"openai": &mockProvider{nameVal: "openai"},
@@ -164,11 +164,11 @@ func TestFindAllAvailableProviders(t *testing.T) {
 		{
 			name:  "no providers available",
 			model: "gpt-4",
-			modelsConfig: map[string][]config.ModelProvider{
-				"gpt-4": {
+			modelsConfig: map[string]config.ModelConfig{
+				"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{
 					{Provider: "openai", Model: "gpt-4"},
 					{Provider: "ollama", Model: "llama-2"},
-				},
+				}},
 			},
 			providers: map[string]provider.Provider{
 				"openai": &mockProvider{nameVal: "openai"},
@@ -180,12 +180,12 @@ func TestFindAllAvailableProviders(t *testing.T) {
 		{
 			name:  "mixed availability states",
 			model: "gpt-4",
-			modelsConfig: map[string][]config.ModelProvider{
-				"gpt-4": {
+			modelsConfig: map[string]config.ModelConfig{
+				"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{
 					{Provider: "openai", Model: "gpt-4"},
 					{Provider: "ollama", Model: "llama-2"},
 					{Provider: "anthropic", Model: "claude-3"},
-				},
+				}},
 			},
 			providers: map[string]provider.Provider{
 				"openai":    &mockProvider{nameVal: "openai"},
@@ -198,8 +198,8 @@ func TestFindAllAvailableProviders(t *testing.T) {
 		{
 			name:  "model not found returns nil",
 			model: "nonexistent",
-			modelsConfig: map[string][]config.ModelProvider{
-				"gpt-4": {{Provider: "openai", Model: "gpt-4"}},
+			modelsConfig: map[string]config.ModelConfig{
+				"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "openai", Model: "gpt-4"}}},
 			},
 			providers: map[string]provider.Provider{
 				"openai": &mockProvider{nameVal: "openai"},
@@ -210,17 +210,12 @@ func TestFindAllAvailableProviders(t *testing.T) {
 		{
 			name:  "provider not in providers map",
 			model: "gpt-4",
-			modelsConfig: map[string][]config.ModelProvider{
-				"gpt-4": {
-					{Provider: "openai", Model: "gpt-4"},
-					{Provider: "missing", Model: "test"},
-				},
+			modelsConfig: map[string]config.ModelConfig{
+				"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "openai", Model: "gpt-4"}}},
 			},
-			providers: map[string]provider.Provider{
-				"openai": &mockProvider{nameVal: "openai"},
-			},
+			providers: map[string]provider.Provider{},
 			failures:  map[string]int{},
-			wantCount: 1,
+			wantCount: 0,
 		},
 	}
 

@@ -162,21 +162,20 @@ func (s *Server) handleV1ChatCompletions(w http.ResponseWriter, r *http.Request)
 			return
 		}
 
-		threshold := s.config.Thresholds.FailuresBeforeSwitch
-
 		if req.Stream {
 			// For streaming, find provider and delegate to streaming handler
-			prov, providerKey, providerModel, err := s.findProviderWithFailover(req.Model, threshold)
+			prov, providerKey, providerModel, err := s.findProviderWithFailover(req.Model, "")
 			if err != nil {
 				s.handleAllProvidersFailed(w, err)
 				return
 			}
+			threshold := s.config.GetThresholds(providerKey).FailuresBeforeSwitch
 			*r = *r.WithContext(setProviderContext(r.Context(), providerKey, req.Model))
 			s.streamV1ChatCompletions(w, r, prov, providerModel, providerKey, req.Model, req.Messages, &req, threshold)
 			return
 		}
 
-		resp, providerKey, err := s.executeWithFailover(r, req.Model, threshold,
+		resp, providerKey, err := s.executeWithFailover(r, req.Model, "",
 			func(ctx context.Context, prov provider.Provider, providerModel string) (any, error) {
 				return prov.Chat(ctx, providerModel, req.Messages, &req)
 			},
@@ -310,21 +309,20 @@ func (s *Server) handleV1Completions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	threshold := s.config.Thresholds.FailuresBeforeSwitch
-
 	if req.Stream {
 		// For streaming, find provider and delegate to streaming handler
-		prov, providerKey, providerModel, err := s.findProviderWithFailover(req.Model, threshold)
+		prov, providerKey, providerModel, err := s.findProviderWithFailover(req.Model, "")
 		if err != nil {
 			s.handleAllProvidersFailed(w, err)
 			return
 		}
+		threshold := s.config.GetThresholds(providerKey).FailuresBeforeSwitch
 		*r = *r.WithContext(setProviderContext(r.Context(), providerKey, req.Model))
 		s.streamV1Completions(w, r, prov, providerModel, providerKey, req.Model, &req, threshold)
 		return
 	}
 
-	resp, providerKey, err := s.executeWithFailover(r, req.Model, threshold,
+	resp, providerKey, err := s.executeWithFailover(r, req.Model, "",
 		func(ctx context.Context, prov provider.Provider, providerModel string) (any, error) {
 			return prov.Complete(ctx, providerModel, &req)
 		},
@@ -411,9 +409,7 @@ func (s *Server) handleV1Embeddings(w http.ResponseWriter, r *http.Request) {
 	// Convert input to string slice
 	input := convertInputToSlice(req.Input)
 
-	threshold := s.config.Thresholds.FailuresBeforeSwitch
-
-	resp, providerKey, err := s.executeWithFailover(r, req.Model, threshold,
+	resp, providerKey, err := s.executeWithFailover(r, req.Model, "",
 		func(ctx context.Context, prov provider.Provider, providerModel string) (any, error) {
 			return prov.Embed(ctx, providerModel, input)
 		},

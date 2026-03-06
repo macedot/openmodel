@@ -501,9 +501,9 @@ func TestRunConfig_WithRealConfig(t *testing.T) {
 	output := strings.TrimSpace(buf.String())
 
 	// Should print the config path on success
-	// The config path should end with config.json
-	if !strings.HasSuffix(output, "config.json") {
-		t.Errorf("Expected config path ending with config.json, got: %s", output)
+	// The config path should end with openmodel.json
+	if !strings.HasSuffix(output, "openmodel.json") {
+		t.Errorf("Expected config path ending with openmodel.json, got: %s", output)
 	}
 }
 
@@ -673,7 +673,7 @@ func TestGetConfigPathWithTempHome(t *testing.T) {
 
 	path := config.GetConfigPath()
 	// Path should exist but file should not
-	expectedPath := filepath.Join(tmpDir, ".config", "openmodel", "config.json")
+	expectedPath := filepath.Join(tmpDir, ".config", "openmodel", "openmodel.json")
 	if path != expectedPath {
 		t.Errorf("expected path %q, got %q", expectedPath, path)
 	}

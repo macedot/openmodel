@@ -22,4 +22,4 @@ coverage.html
 .sisyphus/*
 .opencode
 .worktrees/
-config.json
+openmodel.json

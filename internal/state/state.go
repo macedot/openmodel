@@ -1,7 +1,10 @@
 // Package state manages failure tracking and model availability
 package state
 
-import "sync"
+import (
+	"math/rand"
+	"sync"
+)
 
 // State manages model failure tracking
 type State struct {
@@ -10,6 +13,8 @@ type State struct {
 	unavailableModels map[string]bool
 	currentTimeout    int
 	cycle             int
+	roundRobinIndex   map[string]int // Tracks round-robin position per model
+	rand              *rand.Rand     // Reusable random generator
 }
 
 // New creates a new State
@@ -18,6 +23,8 @@ func New(initialTimeout int) *State {
 		failureCounts:     make(map[string]int),
 		unavailableModels: make(map[string]bool),
 		currentTimeout:    initialTimeout,
+		roundRobinIndex:   make(map[string]int),
+		rand:              rand.New(rand.NewSource(1)), // Seeded for reproducibility
 	}
 }
 
@@ -65,4 +72,35 @@ func (s *State) IncrementTimeout(max int) {
 		s.currentTimeout = max
 	}
 	s.cycle++
+}
+
+// NextRoundRobin returns the next index for round-robin selection for a model
+// total is the total number of available providers
+func (s *State) NextRoundRobin(model string, total int) int {
+	if total <= 1 {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current := s.roundRobinIndex[model]
+	next := (current + 1) % total
+	s.roundRobinIndex[model] = next
+	return next
+}
+
+// GetRandomIndex returns a random index between 0 and total-1
+func (s *State) GetRandomIndex(total int) int {
+	if total <= 1 {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rand.Intn(total)
+}
+
+// ResetRoundRobin resets the round-robin index for a model
+func (s *State) ResetRoundRobin(model string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.roundRobinIndex, model)
 }

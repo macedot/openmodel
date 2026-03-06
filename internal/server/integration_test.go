@@ -92,10 +92,10 @@ func (m *mockProvider) Moderate(ctx context.Context, input string) (*openai.Mode
 func newTestServer(t *testing.T, mockProv *mockProvider) *Server {
 	t.Helper()
 	cfg := config.DefaultConfig()
-	cfg.Models = map[string][]config.ModelProvider{
-		"test-model":      {{Provider: "mock", Model: "test-model"}},
-		"test-model-2":    {{Provider: "mock", Model: "test-model-2"}},
-		"embedding-model": {{Provider: "mock", Model: "embedding-model"}},
+	cfg.Models = map[string]config.ModelConfig{
+		"test-model":      {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "mock", Model: "test-model"}}},
+		"test-model-2":    {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "mock", Model: "test-model-2"}}},
+		"embedding-model": {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "mock", Model: "embedding-model"}}},
 	}
 	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
 	providers := map[string]provider.Provider{}
@@ -837,10 +837,13 @@ func TestProviderFailover(t *testing.T) {
 	}
 
 	cfg := config.DefaultConfig()
-	cfg.Models = map[string][]config.ModelProvider{
+	cfg.Models = map[string]config.ModelConfig{
 		"failover-model": {
-			{Provider: "first", Model: "first-model"},
-			{Provider: "second", Model: "fallback-model"},
+			Strategy: "fallback",
+			Providers: []config.ModelProvider{
+				{Provider: "first", Model: "first-model"},
+				{Provider: "second", Model: "fallback-model"},
+			},
 		},
 	}
 	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
@@ -894,8 +897,8 @@ func TestStateResetAfterSuccess(t *testing.T) {
 	}
 
 	cfg := config.DefaultConfig()
-	cfg.Models = map[string][]config.ModelProvider{
-		"test-model": {{Provider: "mock", Model: "test-model"}},
+	cfg.Models = map[string]config.ModelConfig{
+		"test-model": {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "mock", Model: "test-model"}}},
 	}
 	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
 	providers := map[string]provider.Provider{"mock": mock}
@@ -931,8 +934,8 @@ func TestProviderNotAvailable(t *testing.T) {
 		nameVal: "mock",
 	}
 	cfg := config.DefaultConfig()
-	cfg.Models = map[string][]config.ModelProvider{
-		"test-model": {{Provider: "mock", Model: "test-model"}},
+	cfg.Models = map[string]config.ModelConfig{
+		"test-model": {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "mock", Model: "test-model"}}},
 	}
 	cfg.Thresholds.FailuresBeforeSwitch = 3
 	stateMgr := state.New(cfg.Thresholds.InitialTimeout)

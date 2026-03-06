@@ -272,11 +272,11 @@ func runModels(jsonOutput *bool) {
 	// Group providers by model name, preserving order
 	modelMap := make(map[string][]providerInfo)
 	modelOrder := make([]string, 0)
-	for name, providers := range cfg.Models {
+	for name, modelConfig := range cfg.Models {
 		if _, exists := modelMap[name]; !exists {
 			modelOrder = append(modelOrder, name)
 		}
-		for _, p := range providers {
+		for _, p := range modelConfig.Providers {
 			modelMap[name] = append(modelMap[name], providerInfo{
 				Provider: p.Provider,
 				Model:    p.Model,
@@ -394,9 +394,9 @@ func runTests(providers map[string]provider.Provider, cfg *config.Config, modelN
 	// Determine which models to test
 	modelsToTest := cfg.Models
 	if modelName != "" {
-		if providers, exists := cfg.Models[modelName]; exists {
-			modelsToTest = map[string][]config.ModelProvider{
-				modelName: providers,
+		if modelConfig, exists := cfg.Models[modelName]; exists {
+			modelsToTest = map[string]config.ModelConfig{
+				modelName: modelConfig,
 			}
 		} else {
 			logger.Error("Model not found", "model", modelName)
@@ -405,10 +405,10 @@ func runTests(providers map[string]provider.Provider, cfg *config.Config, modelN
 	}
 
 	// Test each model's providers (submodels)
-	for modelName, modelProviders := range modelsToTest {
+	for modelName, modelConfig := range modelsToTest {
 		logger.Info("Testing model", "model", modelName)
 
-		for _, mp := range modelProviders {
+		for _, mp := range modelConfig.Providers {
 			prov, exists := providers[mp.Provider]
 			if !exists {
 				logger.Error("Provider not found", "provider", mp.Provider, "model", modelName)
@@ -431,8 +431,8 @@ func runTests(providers map[string]provider.Provider, cfg *config.Config, modelN
 	}
 
 	total := 0
-	for _, providers := range modelsToTest {
-		total += len(providers)
+	for _, modelConfig := range modelsToTest {
+		total += len(modelConfig.Providers)
 	}
 	passed := total - failed
 	logger.Info("Test completed", "total", total, "passed", passed, "failed", failed)

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/macedot/openmodel/internal/config"
 	"github.com/macedot/openmodel/internal/logger"
 	"github.com/macedot/openmodel/internal/provider"
 )
@@ -22,15 +23,55 @@ type providerResult struct {
 	providerModel string
 }
 
-// findProviderWithFailover finds the first available provider for a model.
+// findProviderWithFailover finds an available provider for a model based on selection strategy.
 // This is the core provider lookup logic extracted to reduce duplication.
 // Returns (nil, "", "", err) where err indicates why no provider was found.
-func (s *Server) findProviderWithFailover(model string, threshold int) (provider.Provider, string, string, error) {
-	providers, exists := s.config.Models[model]
+func (s *Server) findProviderWithFailover(model string, providerName string) (provider.Provider, string, string, error) {
+	modelConfig, exists := s.config.Models[model]
 	if !exists {
 		return nil, "", "", fmt.Errorf("model %q not found", model)
 	}
 
+	providers := modelConfig.Providers
+	strategy := modelConfig.Strategy
+	if strategy == "" {
+		strategy = config.StrategyFallback
+	}
+
+	// Get thresholds for this provider (provider-specific or global)
+	thresholds := s.config.GetThresholds(providerName)
+	threshold := thresholds.FailuresBeforeSwitch
+
+	// Find all available providers first
+	available := s.findAvailableProvidersForModel(providers, threshold)
+	if len(available) == 0 {
+		return nil, "", "", fmt.Errorf("no available providers for model %q", model)
+	}
+
+	// Select based on strategy
+	switch strategy {
+	case config.StrategyRoundRobin:
+		idx := s.state.NextRoundRobin(model, len(available))
+		p := available[idx]
+		return p.provider, p.providerKey, p.providerModel, nil
+
+	case config.StrategyRandom:
+		idx := s.state.GetRandomIndex(len(available))
+		p := available[idx]
+		return p.provider, p.providerKey, p.providerModel, nil
+
+	case config.StrategyFallback:
+		fallthrough
+	default:
+		// Fallback: return first available
+		p := available[0]
+		return p.provider, p.providerKey, p.providerModel, nil
+	}
+}
+
+// findAvailableProvidersForModel returns available providers for a model based on threshold
+func (s *Server) findAvailableProvidersForModel(providers []config.ModelProvider, threshold int) []providerResult {
+	var results []providerResult
 	for _, p := range providers {
 		providerKey := formatProviderKey(p)
 
@@ -43,19 +84,23 @@ func (s *Server) findProviderWithFailover(model string, threshold int) (provider
 			continue
 		}
 
-		return prov, providerKey, p.Model, nil
+		results = append(results, providerResult{
+			provider:      prov,
+			providerKey:   providerKey,
+			providerModel: p.Model,
+		})
 	}
-
-	return nil, "", "", fmt.Errorf("no available providers for model %q", model)
+	return results
 }
 
 // findAllAvailableProviders returns all available providers for a model.
 func (s *Server) findAllAvailableProviders(model string) []providerResult {
-	providers, exists := s.config.Models[model]
+	modelConfig, exists := s.config.Models[model]
 	if !exists {
 		return nil
 	}
 
+	providers := modelConfig.Providers
 	threshold := s.config.Thresholds.FailuresBeforeSwitch
 	var results []providerResult
 
@@ -210,14 +255,17 @@ func drainStream[T any](stream <-chan T) {
 func (s *Server) executeWithFailover(
 	r *http.Request,
 	model string,
-	threshold int,
+	providerName string,
 	execute func(ctx context.Context, prov provider.Provider, providerModel string) (any, error),
 ) (any, string, error) {
 	for {
-		prov, providerKey, providerModel, err := s.findProviderWithFailover(model, threshold)
+		prov, providerKey, providerModel, err := s.findProviderWithFailover(model, providerName)
 		if err != nil {
 			return nil, "", err
 		}
+
+		// Get threshold for this provider (provider-specific or global)
+		threshold := s.config.GetThresholds(providerKey).FailuresBeforeSwitch
 
 		// Set provider/model in context for logging
 		*r = *r.WithContext(setProviderContext(r.Context(), providerKey, model))

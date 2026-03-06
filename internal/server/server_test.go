@@ -63,8 +63,8 @@ func TestHandleHealth(t *testing.T) {
 
 func TestHandleV1Models(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Models = map[string][]config.ModelProvider{
-		"gpt-4": {{Provider: "openai", Model: "gpt-4"}},
+	cfg.Models = map[string]config.ModelConfig{
+		"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "openai", Model: "gpt-4"}}},
 	}
 	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
 	srv := New(cfg, nil, stateMgr)
@@ -109,8 +109,8 @@ func TestHandleV1ModelNotFound(t *testing.T) {
 
 func TestHandleV1ModelFound(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Models = map[string][]config.ModelProvider{
-		"gpt-4": {{Provider: "openai", Model: "gpt-4"}},
+	cfg.Models = map[string]config.ModelConfig{
+		"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "openai", Model: "gpt-4"}}},
 	}
 	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
 	srv := New(cfg, nil, stateMgr)
@@ -182,8 +182,8 @@ func TestServerStartInvalidPort(t *testing.T) {
 
 func TestHandleV1ModelNonGet(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Models = map[string][]config.ModelProvider{
-		"gpt-4": {{Provider: "openai", Model: "gpt-4"}},
+	cfg.Models = map[string]config.ModelConfig{
+		"gpt-4": {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "openai", Model: "gpt-4"}}},
 	}
 	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
 	srv := New(cfg, nil, stateMgr)
@@ -348,12 +348,12 @@ func BenchmarkHandleRoot(b *testing.B) {
 // BenchmarkHandleV1Models benchmarks the v1 models handler
 func BenchmarkHandleV1Models(b *testing.B) {
 	cfg := config.DefaultConfig()
-	cfg.Models = map[string][]config.ModelProvider{
-		"gpt-4":         {{Provider: "openai", Model: "gpt-4"}},
-		"gpt-3.5-turbo": {{Provider: "openai", Model: "gpt-3.5-turbo"}},
-		"claude-3":      {{Provider: "openai", Model: "claude-3"}},
-		"llama-2":       {{Provider: "ollama", Model: "llama-2"}},
-		"mistral":       {{Provider: "ollama", Model: "mistral"}},
+	cfg.Models = map[string]config.ModelConfig{
+		"gpt-4":         {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "openai", Model: "gpt-4"}}},
+		"gpt-3.5-turbo": {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "openai", Model: "gpt-3.5-turbo"}}},
+		"claude-3":      {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "openai", Model: "claude-3"}}},
+		"llama-2":       {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "ollama", Model: "llama-2"}}},
+		"mistral":       {Strategy: "fallback", Providers: []config.ModelProvider{{Provider: "ollama", Model: "mistral"}}},
 	}
 	stateMgr := state.New(cfg.Thresholds.InitialTimeout)
 	srv := New(cfg, nil, stateMgr)

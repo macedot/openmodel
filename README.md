@@ -47,7 +47,7 @@ Or use docker-compose:
 ```bash
 # Create config file first
 mkdir -p ~/.config/openmodel
-cp config.json.example ~/.config/openmodel/config.json
+cp openmodel.json.example ~/.config/openmodel/openmodel.json
 # Edit config with your API keys
 
 # Start with docker-compose
