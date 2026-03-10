@@ -2,6 +2,8 @@
 
 A Go-based HTTP proxy server providing OpenAI-compatible API endpoints with multi-provider fallback support.
 
+> **Note:** This is a vibe code experiment developed using both [Claude Code](https://claude.ai/code) and [OpenCode](https://github.com/opencode-ai/opencode).
+
 ## Features
 
 - **OpenAI-Compatible API**: Works with any OpenAI-compatible client
