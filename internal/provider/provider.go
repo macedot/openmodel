@@ -62,6 +62,17 @@ type Provider interface {
 
 	// Moderate checks content for policy violations
 	Moderate(ctx context.Context, input string) (*openai.ModerationResponse, error)
+
+	// DoRequest forwards a raw request body to an endpoint and returns the response.
+	// endpoint is the path like "/v1/chat/completions" or "/v1/messages".
+	// body is the raw JSON request body.
+	// headers are additional headers to include (e.g., anthropic-version).
+	// Returns the raw response body from the provider.
+	DoRequest(ctx context.Context, endpoint string, body []byte, headers map[string]string) ([]byte, error)
+
+	// DoStreamRequest forwards a raw streaming request and returns the SSE channel.
+	// Same parameters as DoRequest, but returns a channel of raw SSE lines.
+	DoStreamRequest(ctx context.Context, endpoint string, body []byte, headers map[string]string) (<-chan []byte, error)
 }
 
 // OpenAIProvider implements Provider for OpenAI-compatible APIs
@@ -603,4 +614,85 @@ func (p *OpenAIProvider) Moderate(ctx context.Context, input string) (*openai.Mo
 	}
 
 	return &modResp, nil
+}
+
+// DoRequest forwards a raw request body to the provider endpoint
+func (p *OpenAIProvider) DoRequest(ctx context.Context, endpoint string, body []byte, headers map[string]string) ([]byte, error) {
+	req, err := p.buildRequest(ctx, body, endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Add additional headers
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+
+	resp, err := p.doRequest(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if err := p.handleHTTPResponse(resp, true); err != nil {
+		return nil, err
+	}
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	return respBody, nil
+}
+
+// DoStreamRequest forwards a raw streaming request and returns SSE channel
+func (p *OpenAIProvider) DoStreamRequest(ctx context.Context, endpoint string, body []byte, headers map[string]string) (<-chan []byte, error) {
+	req, err := p.buildRequest(ctx, body, endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Add additional headers
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+
+	resp, err := p.doRequest(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+
+	if err := p.handleHTTPResponse(resp, false); err != nil {
+		return nil, err
+	}
+
+	// Return raw SSE channel
+	ch := make(chan []byte, 10)
+	go func() {
+		defer close(ch)
+		defer resp.Body.Close()
+
+		scanner := bufio.NewScanner(resp.Body)
+		bufPtr := streamBufferPool.Get().(*[]byte)
+		defer streamBufferPool.Put(bufPtr)
+		scanner.Buffer(*bufPtr, maxTokenSize)
+
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			line := scanner.Text()
+			select {
+			case ch <- []byte(line):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return ch, nil
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -105,6 +106,14 @@ func (m *mockProvider) Moderate(ctx context.Context, input string) (*openai.Mode
 		return nil, m.moderateErr
 	}
 	return m.moderateResult, nil
+}
+
+func (m *mockProvider) DoRequest(ctx context.Context, endpoint string, body []byte, headers map[string]string) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockProvider) DoStreamRequest(ctx context.Context, endpoint string, body []byte, headers map[string]string) (<-chan []byte, error) {
+	return nil, errors.New("not implemented")
 }
 
 func newTestServer(t *testing.T, mockProv *mockProvider) *Server {

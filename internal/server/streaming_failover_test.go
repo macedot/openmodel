@@ -96,6 +96,14 @@ func (m *mockStreamProvider) Moderate(ctx context.Context, input string) (*opena
 	return nil, errors.New("not implemented")
 }
 
+func (m *mockStreamProvider) DoRequest(ctx context.Context, endpoint string, body []byte, headers map[string]string) ([]byte, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockStreamProvider) DoStreamRequest(ctx context.Context, endpoint string, body []byte, headers map[string]string) (<-chan []byte, error) {
+	return nil, errors.New("not implemented")
+}
+
 // TestStreamFailover tests the streaming failover logic for chat completions
 func TestStreamFailover(t *testing.T) {
 	t.Run("successful stream on first provider", func(t *testing.T) {
