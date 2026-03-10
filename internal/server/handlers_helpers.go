@@ -95,37 +95,14 @@ func (s *Server) findAvailableProvidersForModel(providers []config.ModelProvider
 	return results
 }
 
-// findAllAvailableProviders returns all available providers for a model.
+// findAllAvailableProviders returns all available providers for a model using global threshold.
+// This is a convenience wrapper around findAvailableProvidersForModel.
 func (s *Server) findAllAvailableProviders(model string) []providerResult {
 	modelConfig, exists := s.config.Models[model]
 	if !exists {
 		return nil
 	}
-
-	providers := modelConfig.Providers
-	threshold := s.config.Thresholds.FailuresBeforeSwitch
-	var results []providerResult
-
-	for _, p := range providers {
-		providerKey := formatProviderKey(p)
-
-		if !s.state.IsAvailable(providerKey, threshold) {
-			continue
-		}
-
-		prov, exists := s.providers[p.Provider]
-		if !exists {
-			continue
-		}
-
-		results = append(results, providerResult{
-			provider:      prov,
-			providerKey:   providerKey,
-			providerModel: p.Model,
-		})
-	}
-
-	return results
+	return s.findAvailableProvidersForModel(modelConfig.Providers, s.config.Thresholds.FailuresBeforeSwitch)
 }
 
 // limitRequestBody limits the request body size to prevent memory exhaustion.
