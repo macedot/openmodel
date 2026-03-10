@@ -159,10 +159,12 @@ func (s *Server) validateModel(model string) error {
 
 // encodeJSON encodes v as JSON with proper error handling.
 // Sets Content-Type header automatically.
+// Returns the error if encoding fails.
 func encodeJSON(w http.ResponseWriter, v any) error {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		logger.Error("Failed to encode response", "error", err)
+		return err
 	}
 	return nil
 }

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net/http/httptest"
 	"testing"
 
 	"github.com/macedot/openmodel/internal/config"
@@ -294,5 +295,45 @@ func TestIsModelNotFoundError(t *testing.T) {
 
 	t.Run("nil error", func(t *testing.T) {
 		assert.False(t, isModelNotFoundError(nil))
+	})
+}
+
+func TestEncodeJSON(t *testing.T) {
+	t.Run("encodes valid data", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		data := map[string]string{"status": "ok"}
+
+		err := encodeJSON(w, data)
+
+		assert.NoError(t, err)
+		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+		assert.Contains(t, w.Body.String(), `"status"`)
+	})
+
+	t.Run("encodes nil returns null", func(t *testing.T) {
+		w := httptest.NewRecorder()
+
+		err := encodeJSON(w, nil)
+
+		assert.NoError(t, err)
+		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+	})
+
+	t.Run("encodes struct", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		data := struct {
+			Name  string `json:"name"`
+			Value int    `json:"value"`
+		}{
+			Name:  "test",
+			Value: 42,
+		}
+
+		err := encodeJSON(w, data)
+
+		assert.NoError(t, err)
+		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+		assert.Contains(t, w.Body.String(), `"name"`)
+		assert.Contains(t, w.Body.String(), `"value"`)
 	})
 }
