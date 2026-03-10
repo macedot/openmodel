@@ -492,6 +492,44 @@ func readRequestBody(r *http.Request, maxSize int64) ([]byte, error) {
 	return body, nil
 }
 
+// replaceModelInBody replaces the model field in a JSON request body.
+// This is used to resolve model aliases to actual provider model names.
+func replaceModelInBody(body []byte, newModel string) []byte {
+	if len(body) == 0 || newModel == "" {
+		return body
+	}
+
+	// Parse as generic map to preserve all fields
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return body
+	}
+
+	// Replace model field
+	req["model"] = newModel
+
+	// Re-encode
+	result, err := json.Marshal(req)
+	if err != nil {
+		return body
+	}
+	return result
+}
+
+// extractModelFromRequestBody extracts model from raw JSON body
+func extractModelFromRequestBody(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &req); err == nil {
+		return req.Model
+	}
+	return ""
+}
+
 // prettyPrintJSON formats JSON with indentation.
 // Returns the formatted string, or a truncated raw string if JSON parsing fails.
 func prettyPrintJSON(data []byte) string {
