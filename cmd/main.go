@@ -566,7 +566,7 @@ func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[
 			var resp *benchResponse
 			var benchErr error
 
-			if endpoint == endpoints.ChatCompletions {
+			if endpoint == endpoints.V1ChatCompletions {
 				// OpenAI endpoint
 				resp, benchErr = benchChat(ctx, prov, providerModel, messages, stream)
 			} else {
@@ -630,12 +630,12 @@ func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[
 func getEndpointsForApiMode(apiMode string) []string {
 	switch apiMode {
 	case "openai":
-		return []string{endpoints.ChatCompletions}
+		return []string{endpoints.V1ChatCompletions}
 	case "anthropic":
 		return []string{endpoints.V1Messages}
 	default:
 		// Empty or unknown: test both endpoints
-		return []string{endpoints.ChatCompletions, endpoints.V1Messages}
+		return []string{endpoints.V1ChatCompletions, endpoints.V1Messages}
 	}
 }
 
@@ -860,7 +860,7 @@ func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[st
 				"provider", providerName,
 				"model", modelName,
 				"url", baseURL,
-				"endpoint", endpoints.ChatCompletions,
+				"endpoint", endpoints.V1ChatCompletions,
 				"stream", stream)
 
 			resp, err := benchChat(ctx, prov, modelName, messages, stream)
@@ -872,7 +872,7 @@ func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[st
 					Provider: providerName,
 					Model:    modelName,
 					URL:      baseURL,
-					Endpoint: endpoints.ChatCompletions,
+					Endpoint: endpoints.V1ChatCompletions,
 					Prompt:   truncate(strings.TrimSpace(messages[0].Content), 100),
 					Error:    err.Error(),
 					Duration: duration.String(),
@@ -887,7 +887,7 @@ func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[st
 				Provider: providerName,
 				Model:    modelName,
 				URL:      baseURL,
-				Endpoint: endpoints.ChatCompletions,
+				Endpoint: endpoints.V1ChatCompletions,
 				Prompt:   truncate(strings.TrimSpace(messages[0].Content), 100),
 				Response: resp.Content,
 				Duration: duration.String(),

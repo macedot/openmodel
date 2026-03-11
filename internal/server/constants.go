@@ -56,19 +56,23 @@ const (
 	SSEDataSuffix = "\n\n"
 )
 
-// Endpoint aliases for convenience (re-export from endpoints package)
+// Endpoint aliases - re-exported from endpoints package for convenience
+
+// OpenAI endpoints
 const (
 	EndpointV1ChatCompletions = endpoints.V1ChatCompletions
 	EndpointV1Completions     = endpoints.V1Completions
 	EndpointV1Embeddings      = endpoints.V1Embeddings
 	EndpointV1Models          = endpoints.V1Models
-	EndpointV1Messages        = endpoints.V1Messages
-	EndpointRoot              = endpoints.Root
-	EndpointHealth             = endpoints.Health
 )
 
-// Provider endpoint aliases
+// Anthropic endpoints
 const (
-	ProviderChatCompletions = endpoints.ChatCompletions
-	ProviderV1Messages      = endpoints.V1MessagesPath
+	EndpointV1Messages = endpoints.V1Messages
+)
+
+// Internal endpoints
+const (
+	EndpointRoot   = endpoints.Root
+	EndpointHealth = endpoints.Health
 )
