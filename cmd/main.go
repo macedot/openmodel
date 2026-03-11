@@ -615,7 +615,6 @@ func runBench(promptFile, scope string) {
 		runBenchProviders(ctx, cfg, providers, messages)
 	case "all":
 		runBenchApplication(ctx, cfg, providers, messages)
-		fmt.Println("\n---")
 		runBenchProviders(ctx, cfg, providers, messages)
 	default:
 		fmt.Fprintf(os.Stderr, "Error: invalid scope '%s'. Use: application, providers, or all\n", scope)
@@ -623,28 +622,82 @@ func runBench(promptFile, scope string) {
 	}
 }
 
+// benchResult holds the result of a single benchmark run
+type benchResult struct {
+	Type       string `json:"type"`
+	Provider   string `json:"provider"`
+	Model      string `json:"model"`
+	ProviderID string `json:"provider_id,omitempty"`
+	Strategy   string `json:"strategy,omitempty"`
+	Prompt     string `json:"prompt,omitempty"`
+	Error      string `json:"error,omitempty"`
+	Response   string `json:"response,omitempty"`
+	Duration   string `json:"duration"`
+	Tokens     *benchTokens `json:"tokens,omitempty"`
+	TokensPerSec float64 `json:"tokens_per_sec,omitempty"`
+}
+
+type benchTokens struct {
+	Prompt     int `json:"prompt"`
+	Completion int `json:"completion"`
+	Total      int `json:"total"`
+}
+
+// writeBenchResult writes a benchmark result to a JSON file
+func writeBenchResult(result benchResult) {
+	// Sanitize provider and model names for filename
+	sanitizedProvider := sanitizeBenchName(result.Provider)
+	sanitizedModel := sanitizeBenchName(result.Model)
+
+	filename := fmt.Sprintf("%d-bench-%s-%s.json", time.Now().UnixNano(), sanitizedProvider, sanitizedModel)
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error marshaling benchmark result: %v\n", err)
+		return
+	}
+	if err := os.WriteFile(filename, data, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing benchmark file: %v\n", err)
+	}
+}
+
+// sanitizeBenchName sanitizes names for use in filenames
+func sanitizeBenchName(name string) string {
+	var result strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			result.WriteRune(r)
+		}
+	}
+	if result.Len() == 0 {
+		return "unknown"
+	}
+	return result.String()
+}
+
 // runBenchApplication tests each configured model alias using its failover chain
 func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[string]provider.Provider, messages []openai.ChatCompletionMessage) {
-	fmt.Println("=== Application Models Benchmark ===")
-	fmt.Printf("Prompt: %s...\n\n", truncate(strings.TrimSpace(messages[0].Content), 50))
-
 	for _, modelName := range cfg.ModelOrder {
 		modelConfig, exists := cfg.Models[modelName]
 		if !exists {
 			continue
 		}
 
-		fmt.Printf("Model: %s\n", modelName)
-		fmt.Printf("  Strategy: %s\n", modelConfig.Strategy)
-		fmt.Printf("  Providers: %s\n", formatProviders(modelConfig.Providers))
-
 		startTime := time.Now()
 
 		// Get first available provider from the chain
-		prov, _, providerModel, err := findFirstAvailableProvider(cfg, providers, modelConfig)
+		prov, providerKey, providerModel, err := findFirstAvailableProvider(cfg, providers, modelConfig)
+
 		if err != nil {
-			fmt.Printf("  Error: %v\n", err)
-			fmt.Println()
+			result := benchResult{
+				Type:     "error",
+				Provider: modelName,
+				Model:    modelName,
+				Strategy: modelConfig.Strategy,
+				Prompt:   truncate(strings.TrimSpace(messages[0].Content), 100),
+				Error:    err.Error(),
+				Duration: time.Since(startTime).String(),
+			}
+			writeBenchResult(result)
 			continue
 		}
 
@@ -653,19 +706,43 @@ func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[
 		duration := time.Since(startTime)
 
 		if err != nil {
-			fmt.Printf("  Error: %v\n", err)
-			fmt.Printf("  Duration: %v\n", duration)
-		} else {
-			content := resp.Choices[0].Message.Content
-			fmt.Printf("  Response: %s\n", truncate(content, 100))
-			fmt.Printf("  Tokens: prompt=%d, completion=%d, total=%d\n",
-				resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens)
-			fmt.Printf("  Duration: %v\n", duration)
+			result := benchResult{
+				Type:       "error",
+				Provider:   modelName,
+				Model:      modelName,
+				ProviderID: providerKey,
+				Strategy:   modelConfig.Strategy,
+				Prompt:     truncate(strings.TrimSpace(messages[0].Content), 100),
+				Error:      err.Error(),
+				Duration:   duration.String(),
+			}
+			writeBenchResult(result)
+			continue
+		}
+
+		result := benchResult{
+			Type:       "response",
+			Provider:   modelName,
+			Model:      modelName,
+			ProviderID: providerKey,
+			Strategy:   modelConfig.Strategy,
+			Prompt:     truncate(strings.TrimSpace(messages[0].Content), 100),
+			Response:   resp.Choices[0].Message.Content,
+			Duration:   duration.String(),
+		}
+
+		if resp.Usage.TotalTokens > 0 {
+			result.Tokens = &benchTokens{
+				Prompt:     resp.Usage.PromptTokens,
+				Completion: resp.Usage.CompletionTokens,
+				Total:      resp.Usage.TotalTokens,
+			}
 			if resp.Usage.PromptTokens > 0 {
-				fmt.Printf("  Tokens/sec: %.2f\n", float64(resp.Usage.CompletionTokens)/duration.Seconds())
+				result.TokensPerSec = float64(resp.Usage.CompletionTokens) / duration.Seconds()
 			}
 		}
-		fmt.Println()
+
+		writeBenchResult(result)
 	}
 }
 
@@ -684,9 +761,6 @@ func findFirstAvailableProvider(cfg *config.Config, providers map[string]provide
 
 // runBenchProviders tests every model on every provider individually
 func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[string]provider.Provider, messages []openai.ChatCompletionMessage) {
-	fmt.Println("=== All Provider Models Benchmark ===")
-	fmt.Printf("Prompt: %s...\n\n", truncate(strings.TrimSpace(messages[0].Content), 50))
-
 	// Sort provider names for consistent output
 	var providerNames []string
 	for name := range cfg.Providers {
@@ -698,12 +772,8 @@ func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[st
 		provConfig := cfg.Providers[providerName]
 		prov, exists := providers[providerName]
 		if !exists {
-			fmt.Printf("Provider: %s - NOT INITIALIZED\n\n", providerName)
 			continue
 		}
-
-		fmt.Printf("Provider: %s\n", providerName)
-		fmt.Printf("  URL: %s\n", provConfig.URL)
 
 		// Sort model names for consistent output
 		models := make([]string, len(provConfig.Models))
@@ -711,27 +781,46 @@ func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[st
 		sort.Strings(models)
 
 		for _, modelName := range models {
-			fmt.Printf("  Model: %s\n", modelName)
-
 			startTime := time.Now()
+
 			resp, err := prov.Chat(ctx, modelName, messages, nil)
 			duration := time.Since(startTime)
 
 			if err != nil {
-				fmt.Printf("    Error: %v\n", err)
-				fmt.Printf("    Duration: %v\n", duration)
-			} else {
-				content := resp.Choices[0].Message.Content
-				fmt.Printf("    Response: %s\n", truncate(content, 100))
-				fmt.Printf("    Tokens: prompt=%d, completion=%d, total=%d\n",
-					resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens)
-				fmt.Printf("    Duration: %v\n", duration)
+				result := benchResult{
+					Type:     "error",
+					Provider: providerName,
+					Model:    modelName,
+					Prompt:   truncate(strings.TrimSpace(messages[0].Content), 100),
+					Error:    err.Error(),
+					Duration: duration.String(),
+				}
+				writeBenchResult(result)
+				continue
+			}
+
+			result := benchResult{
+				Type:     "response",
+				Provider: providerName,
+				Model:    modelName,
+				Prompt:   truncate(strings.TrimSpace(messages[0].Content), 100),
+				Response: resp.Choices[0].Message.Content,
+				Duration: duration.String(),
+			}
+
+			if resp.Usage.TotalTokens > 0 {
+				result.Tokens = &benchTokens{
+					Prompt:     resp.Usage.PromptTokens,
+					Completion: resp.Usage.CompletionTokens,
+					Total:      resp.Usage.TotalTokens,
+				}
 				if resp.Usage.PromptTokens > 0 {
-					fmt.Printf("    Tokens/sec: %.2f\n", float64(resp.Usage.CompletionTokens)/duration.Seconds())
+					result.TokensPerSec = float64(resp.Usage.CompletionTokens) / duration.Seconds()
 				}
 			}
+
+			writeBenchResult(result)
 		}
-		fmt.Println()
 	}
 }
 
