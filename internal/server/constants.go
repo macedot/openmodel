@@ -1,7 +1,11 @@
 // Package server implements the HTTP server and handlers
 package server
 
-import "time"
+import (
+	"time"
+
+	"github.com/macedot/openmodel/internal/endpoints"
+)
 
 // HTTP Server defaults
 const (
@@ -50,4 +54,21 @@ const (
 	SSEDataPrefix = "data: "
 	SSEDataDone   = "data: [DONE]"
 	SSEDataSuffix = "\n\n"
+)
+
+// Endpoint aliases for convenience (re-export from endpoints package)
+const (
+	EndpointV1ChatCompletions = endpoints.V1ChatCompletions
+	EndpointV1Completions     = endpoints.V1Completions
+	EndpointV1Embeddings      = endpoints.V1Embeddings
+	EndpointV1Models          = endpoints.V1Models
+	EndpointV1Messages        = endpoints.V1Messages
+	EndpointRoot              = endpoints.Root
+	EndpointHealth             = endpoints.Health
+)
+
+// Provider endpoint aliases
+const (
+	ProviderChatCompletions = endpoints.ChatCompletions
+	ProviderV1Messages      = endpoints.V1MessagesPath
 )

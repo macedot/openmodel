@@ -25,6 +25,7 @@ import (
 	"github.com/macedot/openmodel/internal/api/anthropic"
 	"github.com/macedot/openmodel/internal/api/openai"
 	"github.com/macedot/openmodel/internal/config"
+	"github.com/macedot/openmodel/internal/endpoints"
 	"github.com/macedot/openmodel/internal/logger"
 	"github.com/macedot/openmodel/internal/provider"
 	"github.com/macedot/openmodel/internal/server"
@@ -549,10 +550,10 @@ func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[
 		}
 
 		// Determine which endpoints to test based on api_mode
-		endpoints := getEndpointsForApiMode(modelConfig.ApiMode)
+		testEndpoints := getEndpointsForApiMode(modelConfig.ApiMode)
 		baseURL := prov.BaseURL()
 
-		for _, endpoint := range endpoints {
+		for _, endpoint := range testEndpoints {
 			startTime := time.Now()
 
 			logger.Info("Benchmarking model",
@@ -565,7 +566,7 @@ func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[
 			var resp *benchResponse
 			var benchErr error
 
-			if endpoint == "/chat/completions" {
+			if endpoint == endpoints.ChatCompletions {
 				// OpenAI endpoint
 				resp, benchErr = benchChat(ctx, prov, providerModel, messages, stream)
 			} else {
@@ -629,12 +630,12 @@ func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[
 func getEndpointsForApiMode(apiMode string) []string {
 	switch apiMode {
 	case "openai":
-		return []string{"/chat/completions"}
+		return []string{endpoints.ChatCompletions}
 	case "anthropic":
-		return []string{"/v1/messages"}
+		return []string{endpoints.V1Messages}
 	default:
 		// Empty or unknown: test both endpoints
-		return []string{"/chat/completions", "/v1/messages"}
+		return []string{endpoints.ChatCompletions, endpoints.V1Messages}
 	}
 }
 
@@ -728,7 +729,7 @@ func benchAnthropicEndpoint(ctx context.Context, prov provider.Provider, model s
 
 // benchAnthropicNonStream performs a non-streaming Anthropic request
 func benchAnthropicNonStream(ctx context.Context, prov provider.Provider, body []byte, headers map[string]string, model string) (*benchResponse, error) {
-	respBody, err := prov.DoRequest(ctx, "/v1/messages", body, headers)
+	respBody, err := prov.DoRequest(ctx, endpoints.V1Messages, body, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -752,7 +753,7 @@ func benchAnthropicNonStream(ctx context.Context, prov provider.Provider, body [
 
 // benchAnthropicStream performs a streaming Anthropic request
 func benchAnthropicStream(ctx context.Context, prov provider.Provider, body []byte, headers map[string]string, model string) (*benchResponse, error) {
-	ch, err := prov.DoStreamRequest(ctx, "/v1/messages", body, headers)
+	ch, err := prov.DoStreamRequest(ctx, endpoints.V1Messages, body, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -859,7 +860,7 @@ func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[st
 				"provider", providerName,
 				"model", modelName,
 				"url", baseURL,
-				"endpoint", "/chat/completions",
+				"endpoint", endpoints.ChatCompletions,
 				"stream", stream)
 
 			resp, err := benchChat(ctx, prov, modelName, messages, stream)
@@ -871,7 +872,7 @@ func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[st
 					Provider: providerName,
 					Model:    modelName,
 					URL:      baseURL,
-					Endpoint: "/chat/completions",
+					Endpoint: endpoints.ChatCompletions,
 					Prompt:   truncate(strings.TrimSpace(messages[0].Content), 100),
 					Error:    err.Error(),
 					Duration: duration.String(),
@@ -886,7 +887,7 @@ func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[st
 				Provider: providerName,
 				Model:    modelName,
 				URL:      baseURL,
-				Endpoint: "/chat/completions",
+				Endpoint: endpoints.ChatCompletions,
 				Prompt:   truncate(strings.TrimSpace(messages[0].Content), 100),
 				Response: resp.Content,
 				Duration: duration.String(),

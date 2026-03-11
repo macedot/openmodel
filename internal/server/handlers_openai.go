@@ -58,7 +58,7 @@ func (s *Server) handleV1ChatCompletions(c *fiber.Ctx) error {
 
 	// Convert request if needed
 	forwardBody := body
-	forwardEndpoint := "/v1/chat/completions"
+	forwardEndpoint := EndpointV1ChatCompletions
 
 	if targetFormat == converters.APIFormatAnthropic {
 		// Get converter
@@ -72,7 +72,7 @@ func (s *Server) handleV1ChatCompletions(c *fiber.Ctx) error {
 		if err != nil {
 			return handleError(c, "failed to convert request: "+err.Error(), fiber.StatusBadRequest)
 		}
-		forwardEndpoint = converter.GetEndpoint("/v1/chat/completions")
+		forwardEndpoint = converter.GetEndpoint(EndpointV1ChatCompletions)
 		for k, v := range converter.GetHeaders() {
 			forwardHeaders[k] = v
 		}

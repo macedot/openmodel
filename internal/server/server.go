@@ -183,14 +183,14 @@ func extractModelFromRequest(body []byte) string {
 // registerRoutes registers all API routes
 func (s *Server) registerRoutes(app *fiber.App) {
 	// Health endpoints
-	app.Get("/", s.handleRoot)
-	app.Get("/health", s.handleHealth)
+	app.Get(EndpointRoot, s.handleRoot)
+	app.Get(EndpointHealth, s.handleHealth)
 
 	// OpenAI endpoints
-	app.Post("/v1/chat/completions", s.handleV1ChatCompletions)
+	app.Post(EndpointV1ChatCompletions, s.handleV1ChatCompletions)
 
 	// Anthropic endpoints
-	app.Post("/v1/messages", s.handleV1Messages)
+	app.Post(EndpointV1Messages, s.handleV1Messages)
 }
 
 // handleRoot handles GET /

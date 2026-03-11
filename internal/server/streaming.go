@@ -69,9 +69,9 @@ func (s *Server) streamWithFailover(c *fiber.Ctx, model string, body []byte, hea
 		}
 
 		// Determine endpoint
-		endpoint := "/v1/chat/completions"
+		endpoint := EndpointV1ChatCompletions
 		if sourceFormat == converters.APIFormatAnthropic {
-			endpoint = "/v1/messages"
+			endpoint = EndpointV1Messages
 		}
 		if hasConverter {
 			endpoint = converter.GetEndpoint(endpoint)

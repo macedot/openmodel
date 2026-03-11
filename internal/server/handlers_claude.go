@@ -72,7 +72,7 @@ func (s *Server) handleV1Messages(c *fiber.Ctx) error {
 
 	// Convert request if needed
 	forwardBody := body
-	forwardEndpoint := "/v1/messages"
+	forwardEndpoint := EndpointV1Messages
 
 	if targetFormat == converters.APIFormatOpenAI {
 		// Get converter
@@ -86,7 +86,7 @@ func (s *Server) handleV1Messages(c *fiber.Ctx) error {
 		if err != nil {
 			return handleError(c, "failed to convert request: "+err.Error(), fiber.StatusBadRequest)
 		}
-		forwardEndpoint = converter.GetEndpoint("/v1/messages")
+		forwardEndpoint = converter.GetEndpoint(EndpointV1Messages)
 		// Remove anthropic-version header for OpenAI endpoint
 		delete(forwardHeaders, "anthropic-version")
 	}

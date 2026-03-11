@@ -7,6 +7,7 @@ import (
 
 	"github.com/macedot/openmodel/internal/api/anthropic"
 	"github.com/macedot/openmodel/internal/api/openai"
+	"github.com/macedot/openmodel/internal/endpoints"
 )
 
 // AnthropicToOpenAIConverter converts Anthropic format to OpenAI format
@@ -56,7 +57,7 @@ func (c *AnthropicToOpenAIConverter) ConvertStreamLine(line, model, id string, s
 
 // GetEndpoint returns the OpenAI endpoint
 func (c *AnthropicToOpenAIConverter) GetEndpoint(original string) string {
-	return "/v1/chat/completions"
+	return endpoints.V1ChatCompletions
 }
 
 // GetHeaders returns headers to remove (not add) - removes anthropic-version
