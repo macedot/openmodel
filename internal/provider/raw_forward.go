@@ -4,6 +4,7 @@ package provider
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,8 +27,9 @@ func (p *OpenAIProvider) DoRequest(ctx context.Context, endpoint string, body []
 	if traceFile != nil {
 		defer traceFile.Close()
 		redactedHeaders := applogger.RedactHeaders(headers)
-		fmt.Fprintf(traceFile, "{\"type\":\"request\",\"provider\":\"%s\",\"original_url\":\"%s\",\"endpoint\":\"%s\",\"url\":\"%s\",\"headers\":%q,\"body\":%s}\n",
-			p.name, originalURL, endpoint, p.baseURL+endpoint, redactedHeaders, body)
+		headersJSON, _ := json.Marshal(redactedHeaders)
+		fmt.Fprintf(traceFile, "{\"type\":\"request\",\"provider\":\"%s\",\"original_url\":\"%s\",\"endpoint\":\"%s\",\"url\":\"%s\",\"headers\":%s,\"body\":%s}\n",
+			p.name, originalURL, endpoint, p.baseURL+endpoint, headersJSON, body)
 	}
 
 	req, err := p.buildRequest(ctx, body, endpoint)
@@ -81,8 +83,9 @@ func (p *OpenAIProvider) DoStreamRequest(ctx context.Context, endpoint string, b
 	traceFile := createTraceFileForRequest(p.name, requestID)
 	if traceFile != nil {
 		redactedHeaders := applogger.RedactHeaders(headers)
-		fmt.Fprintf(traceFile, "{\"type\":\"request\",\"provider\":\"%s\",\"original_url\":\"%s\",\"endpoint\":\"%s\",\"url\":\"%s\",\"headers\":%q,\"body\":%s}\n",
-			p.name, originalURL, endpoint, p.baseURL+endpoint, redactedHeaders, body)
+		headersJSON, _ := json.Marshal(redactedHeaders)
+		fmt.Fprintf(traceFile, "{\"type\":\"request\",\"provider\":\"%s\",\"original_url\":\"%s\",\"endpoint\":\"%s\",\"url\":\"%s\",\"headers\":%s,\"body\":%s}\n",
+			p.name, originalURL, endpoint, p.baseURL+endpoint, headersJSON, body)
 	}
 
 	req, err := p.buildRequest(ctx, body, endpoint)

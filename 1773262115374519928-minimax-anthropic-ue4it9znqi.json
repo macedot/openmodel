@@ -1,0 +1,9 @@
+{"type":"request","provider":"minimax-anthropic","original_url":"/v1/chat/completions","endpoint":"/v1/chat/completions","url":"https://api.minimax.io/anthropic/v1/chat/completions","headers":map[],"body":{"max_tokens":300,"messages":[{"content":"Say hello","role":"user"}],"model":"MiniMax-M2.5"}}
+{"type":"response","provider":"minimax-anthropic","original_url":"/v1/chat/completions","endpoint":"/v1/chat/completions","url":"https://api.minimax.io/anthropic/v1/chat/completions","status":404,"body":<html>
+<head><title>404 Not Found</title></head>
+<body>
+<center><h1>404 Not Found</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
+}
