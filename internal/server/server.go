@@ -13,6 +13,7 @@ import (
 	"github.com/macedot/openmodel/internal/config"
 	applogger "github.com/macedot/openmodel/internal/logger"
 	"github.com/macedot/openmodel/internal/provider"
+	_ "github.com/macedot/openmodel/internal/server/converters"
 	"github.com/macedot/openmodel/internal/state"
 	"github.com/sixafter/nanoid"
 )
