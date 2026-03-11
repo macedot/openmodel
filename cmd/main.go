@@ -143,11 +143,7 @@ func loadAndValidateConfig(configPath string) *config.Config {
 	}
 
 	// Print config path
-	if configPath != "" {
-		logger.Info("Config loaded from custom path", "config_path", configPath)
-	} else {
-		logger.Info("Config loaded", "config_path", cfg.GetConfigPath())
-	}
+	logger.Info("Config loaded", "config_path", cfg.GetConfigPath())
 
 	// Print log level
 	if cfg.LogLevel != "" && cfg.LogLevel != "info" {
