@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/macedot/openmodel/internal/config"
+	"github.com/macedot/openmodel/internal/provider"
 )
 
 func TestPrintUsage(t *testing.T) {
@@ -803,6 +804,356 @@ func TestDefaultModelAttribute(t *testing.T) {
 
 			if foundDefault != tt.expectedDefault {
 				t.Errorf("expected default model %q, got %q", tt.expectedDefault, foundDefault)
+			}
+		})
+	}
+}
+
+// Tests for bench command
+
+func TestPrintBenchUsage(t *testing.T) {
+	oldStderr := os.Stderr
+	defer func() { os.Stderr = oldStderr }()
+
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+	os.Args = []string{"openmodel"}
+
+	printBenchUsage()
+
+	w.Close()
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+
+	output := buf.String()
+	if !strings.Contains(output, "Usage:") {
+		t.Error("Expected 'Usage:' in bench help output")
+	}
+	if !strings.Contains(output, "bench") {
+		t.Error("Expected 'bench' in help output")
+	}
+	if !strings.Contains(output, "-prompt") {
+		t.Error("Expected '-prompt' in help output")
+	}
+	if !strings.Contains(output, "-scope") {
+		t.Error("Expected '-scope' in help output")
+	}
+	if !strings.Contains(output, "application") {
+		t.Error("Expected 'application' scope mode in help output")
+	}
+	if !strings.Contains(output, "providers") {
+		t.Error("Expected 'providers' scope mode in help output")
+	}
+	if !strings.Contains(output, "all") {
+		t.Error("Expected 'all' scope mode in help output")
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		maxLen   int
+		expected string
+	}{
+		{
+			name:     "short string unchanged",
+			input:    "hello",
+			maxLen:   10,
+			expected: "hello",
+		},
+		{
+			name:     "exact length unchanged",
+			input:    "hello",
+			maxLen:   5,
+			expected: "hello",
+		},
+		{
+			name:     "long string truncated",
+			input:    "hello world this is a long string",
+			maxLen:   10,
+			expected: "hello worl...", // first 10 chars + "..."
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			maxLen:   10,
+			expected: "",
+		},
+		{
+			name:     "single character",
+			input:    "a",
+			maxLen:   5,
+			expected: "a",
+		},
+		{
+			name:     "very short maxLen",
+			input:    "hello world",
+			maxLen:   3,
+			expected: "hel...",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := truncate(tt.input, tt.maxLen)
+			if result != tt.expected {
+				t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFormatProviders(t *testing.T) {
+	tests := []struct {
+		name       string
+		providers  []config.ModelProvider
+		expected   string
+		minResults []string // strings that must be in result
+	}{
+		{
+			name:       "empty providers",
+			providers:  []config.ModelProvider{},
+			expected:   "",
+			minResults: []string{},
+		},
+		{
+			name: "single provider",
+			providers: []config.ModelProvider{
+				{Provider: "openai", Model: "gpt-4"},
+			},
+			expected:   "openai/gpt-4",
+			minResults: []string{"openai/gpt-4"},
+		},
+		{
+			name: "multiple providers",
+			providers: []config.ModelProvider{
+				{Provider: "openai", Model: "gpt-4"},
+				{Provider: "ollama", Model: "llama2"},
+			},
+			expected:   "openai/gpt-4, ollama/llama2",
+			minResults: []string{"openai/gpt-4", "ollama/llama2"},
+		},
+		{
+			name: "three providers",
+			providers: []config.ModelProvider{
+				{Provider: "openai", Model: "gpt-4"},
+				{Provider: "anthropic", Model: "claude-3"},
+				{Provider: "local", Model: "llama2"},
+			},
+			minResults: []string{"openai/gpt-4", "anthropic/claude-3", "local/llama2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatProviders(tt.providers)
+
+			if tt.expected != "" && result != tt.expected {
+				t.Errorf("formatProviders() = %q, want %q", result, tt.expected)
+			}
+
+			for _, minResult := range tt.minResults {
+				if !strings.Contains(result, minResult) {
+					t.Errorf("formatProviders() result %q missing expected substring %q", result, minResult)
+				}
+			}
+		})
+	}
+}
+
+func TestBenchCommandFlagParsing(t *testing.T) {
+	tests := []struct {
+		name        string
+		args        []string
+		wantPrompt  string
+		wantScope   string
+		wantParseOK bool
+	}{
+		{
+			name:        "default scope",
+			args:        []string{"-prompt", "test.txt"},
+			wantPrompt:  "test.txt",
+			wantScope:   "application",
+			wantParseOK: true,
+		},
+		{
+			name:        "explicit scope providers",
+			args:        []string{"-prompt", "test.txt", "-scope", "providers"},
+			wantPrompt:  "test.txt",
+			wantScope:   "providers",
+			wantParseOK: true,
+		},
+		{
+			name:        "explicit scope all",
+			args:        []string{"-prompt", "test.txt", "-scope", "all"},
+			wantPrompt:  "test.txt",
+			wantScope:   "all",
+			wantParseOK: true,
+		},
+		{
+			name:        "app alias for application scope",
+			args:        []string{"-prompt", "test.txt", "-scope", "app"},
+			wantPrompt:  "test.txt",
+			wantScope:   "app",
+			wantParseOK: true,
+		},
+		{
+			name:        "missing prompt flag",
+			args:        []string{"-scope", "providers"},
+			wantPrompt:  "",
+			wantScope:   "providers",
+			wantParseOK: true, // Parse succeeds, but validation should fail
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flagSet := flag.NewFlagSet("bench", flag.ContinueOnError)
+			flagSet.SetOutput(&bytes.Buffer{})
+
+			promptFile := flagSet.String("prompt", "", "Prompt file")
+			scope := flagSet.String("scope", "application", "Scope")
+
+			err := flagSet.Parse(tt.args)
+			parseOK := err == nil
+
+			if parseOK != tt.wantParseOK {
+				t.Errorf("parse error = %v, want parseOK = %v", err, tt.wantParseOK)
+			}
+
+			if parseOK {
+				if *promptFile != tt.wantPrompt {
+					t.Errorf("prompt = %q, want %q", *promptFile, tt.wantPrompt)
+				}
+				if *scope != tt.wantScope {
+					t.Errorf("scope = %q, want %q", *scope, tt.wantScope)
+				}
+			}
+		})
+	}
+}
+
+func TestPrintUsageIncludesBench(t *testing.T) {
+	oldStderr := os.Stderr
+	defer func() { os.Stderr = oldStderr }()
+
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+	os.Args = []string{"openmodel"}
+
+	printUsage()
+
+	w.Close()
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+
+	output := buf.String()
+	if !strings.Contains(output, "bench") {
+		t.Error("Expected 'bench' command in usage output")
+	}
+	if !strings.Contains(output, "Benchmark models with prompts") {
+		t.Error("Expected bench command description in usage output")
+	}
+}
+
+func TestFindFirstAvailableProvider(t *testing.T) {
+	// Note: This test verifies the logic of findFirstAvailableProvider without
+	// mocking the full Provider interface. The function iterates through the
+	// model's providers list and finds the first one that exists in the providers map.
+
+	tests := []struct {
+		name        string
+		modelConfig config.ModelConfig
+		// providersExist indicates which providers are in the map (true = exists)
+		providersExist map[string]bool
+		wantErr        bool
+		wantProvider   string
+		wantModel      string
+	}{
+		{
+			name: "first provider available",
+			modelConfig: config.ModelConfig{
+				Strategy: "fallback",
+				Providers: []config.ModelProvider{
+					{Provider: "openai", Model: "gpt-4"},
+				},
+			},
+			providersExist: map[string]bool{"openai": true},
+			wantErr:        false,
+			wantProvider:    "openai",
+			wantModel:       "gpt-4",
+		},
+		{
+			name: "second provider when first unavailable",
+			modelConfig: config.ModelConfig{
+				Strategy: "fallback",
+				Providers: []config.ModelProvider{
+					{Provider: "openai", Model: "gpt-4"},
+					{Provider: "ollama", Model: "llama2"},
+				},
+			},
+			providersExist: map[string]bool{"ollama": true}, // openai not in map
+			wantErr:        false,
+			wantProvider:    "ollama",
+			wantModel:       "llama2",
+		},
+		{
+			name: "no providers available",
+			modelConfig: config.ModelConfig{
+				Strategy: "fallback",
+				Providers: []config.ModelProvider{
+					{Provider: "openai", Model: "gpt-4"},
+				},
+			},
+			providersExist: map[string]bool{}, // empty
+			wantErr:        true,
+		},
+		{
+			name: "empty providers list",
+			modelConfig: config.ModelConfig{
+				Strategy:  "fallback",
+				Providers: []config.ModelProvider{},
+			},
+			providersExist: map[string]bool{"openai": true},
+			wantErr:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Build a minimal providers map
+			// Since we can't easily mock Provider interface, we use nil values
+			// The function only checks if the key exists in the map
+			providers := make(map[string]provider.Provider)
+			for name := range tt.providersExist {
+				providers[name] = nil // The function checks existence, not functionality
+			}
+
+			cfg := &config.Config{}
+
+			_, provKey, model, err := findFirstAvailableProvider(cfg, providers, tt.modelConfig)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				if !strings.Contains(provKey, tt.wantProvider) {
+					t.Errorf("provider key = %q, want to contain %q", provKey, tt.wantProvider)
+				}
+				if model != tt.wantModel {
+					t.Errorf("model = %q, want %q", model, tt.wantModel)
+				}
 			}
 		})
 	}

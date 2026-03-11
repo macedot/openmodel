@@ -4,6 +4,7 @@
 //
 //	openmodel serve     Start the OpenModel server (default)
 //	openmodel test      Test configured models
+//	openmodel bench     Benchmark models with prompts
 //	openmodel -h        Show help
 package main
 
@@ -16,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -99,6 +101,22 @@ func main() {
 		return
 	}
 
+	if command == "bench" {
+		promptFile := flag.String("prompt", "", "Path to file containing the prompt (required)")
+		scope := flag.String("scope", "application", "Scope: application, providers, or all")
+
+		if err := parseCommandFlags(args, printBenchUsage); err != nil {
+			return
+		}
+		if *promptFile == "" {
+			fmt.Fprintf(os.Stderr, "Error: --prompt is required\n\n")
+			printBenchUsage()
+			os.Exit(1)
+		}
+		runBench(*promptFile, *scope)
+		return
+	}
+
 	if command != "serve" {
 		fmt.Fprintf(os.Stderr, "Error: unknown command: %s\n\n", command)
 		printUsage()
@@ -165,6 +183,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  test     Test configured providers\n")
 	fmt.Fprintf(os.Stderr, "  models   List available models\n")
 	fmt.Fprintf(os.Stderr, "  config   Find and validate config file\n")
+	fmt.Fprintf(os.Stderr, "  bench    Benchmark models with prompts\n")
 	fmt.Fprintf(os.Stderr, "\nOptions:\n")
 	fmt.Fprintf(os.Stderr, "  -h, --help    Show help\n")
 	fmt.Fprintf(os.Stderr, "  -v, --version Show version\n")
@@ -178,6 +197,18 @@ func printVersion() {
 	if BuildDate != "unknown" {
 		fmt.Printf("build date: %s\n", BuildDate)
 	}
+}
+
+func printBenchUsage() {
+	fmt.Fprintf(os.Stderr, "Usage: %s bench [options]\n\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "Benchmark models by submitting prompts.\n\n")
+	fmt.Fprintf(os.Stderr, "Options:\n")
+	fmt.Fprintf(os.Stderr, "  -prompt <file>   Path to file containing the prompt (required)\n")
+	fmt.Fprintf(os.Stderr, "  -scope <mode>    Scope: application, providers, or all (default: application)\n")
+	fmt.Fprintf(os.Stderr, "\nScope modes:\n")
+	fmt.Fprintf(os.Stderr, "  application  Test each model alias (uses configured failover chains)\n")
+	fmt.Fprintf(os.Stderr, "  providers    Test every model on every provider individually\n")
+	fmt.Fprintf(os.Stderr, "  all          Run both application and providers modes\n")
 }
 
 func runServer(configPath *string) {
@@ -520,4 +551,175 @@ func testChatModel(ctx context.Context, prov provider.Provider, model string) *M
 
 func intPtr(i int) *int {
 	return &i
+}
+
+// runBench executes benchmark tests based on scope mode
+func runBench(promptFile, scope string) {
+	// Load config
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Read prompt file
+	prompt, err := os.ReadFile(promptFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading prompt file: %v\n", err)
+		os.Exit(1)
+	}
+	promptStr := strings.TrimSpace(string(prompt))
+
+	// Initialize providers
+	providers := initProviders(cfg)
+
+	// Create benchmark context
+	ctx := context.Background()
+	messages := []openai.ChatCompletionMessage{
+		{Role: "user", Content: promptStr},
+	}
+
+	// Run benchmarks based on scope
+	switch scope {
+	case "application", "app":
+		runBenchApplication(ctx, cfg, providers, messages)
+	case "providers":
+		runBenchProviders(ctx, cfg, providers, messages)
+	case "all":
+		runBenchApplication(ctx, cfg, providers, messages)
+		fmt.Println("\n---")
+		runBenchProviders(ctx, cfg, providers, messages)
+	default:
+		fmt.Fprintf(os.Stderr, "Error: invalid scope '%s'. Use: application, providers, or all\n", scope)
+		os.Exit(1)
+	}
+}
+
+// runBenchApplication tests each configured model alias using its failover chain
+func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[string]provider.Provider, messages []openai.ChatCompletionMessage) {
+	fmt.Println("=== Application Models Benchmark ===")
+	fmt.Printf("Prompt: %s...\n\n", truncate(strings.TrimSpace(messages[0].Content), 50))
+
+	for _, modelName := range cfg.ModelOrder {
+		modelConfig, exists := cfg.Models[modelName]
+		if !exists {
+			continue
+		}
+
+		fmt.Printf("Model: %s\n", modelName)
+		fmt.Printf("  Strategy: %s\n", modelConfig.Strategy)
+		fmt.Printf("  Providers: %s\n", formatProviders(modelConfig.Providers))
+
+		startTime := time.Now()
+
+		// Get first available provider from the chain
+		prov, _, providerModel, err := findFirstAvailableProvider(cfg, providers, modelConfig)
+		if err != nil {
+			fmt.Printf("  Error: %v\n", err)
+			fmt.Println()
+			continue
+		}
+
+		// Make the request
+		resp, err := prov.Chat(ctx, providerModel, messages, nil)
+		duration := time.Since(startTime)
+
+		if err != nil {
+			fmt.Printf("  Error: %v\n", err)
+			fmt.Printf("  Duration: %v\n", duration)
+		} else {
+			content := resp.Choices[0].Message.Content
+			fmt.Printf("  Response: %s\n", truncate(content, 100))
+			fmt.Printf("  Tokens: prompt=%d, completion=%d, total=%d\n",
+				resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens)
+			fmt.Printf("  Duration: %v\n", duration)
+			if resp.Usage.PromptTokens > 0 {
+				fmt.Printf("  Tokens/sec: %.2f\n", float64(resp.Usage.CompletionTokens)/duration.Seconds())
+			}
+		}
+		fmt.Println()
+	}
+}
+
+// findFirstAvailableProvider returns the first provider in the chain that is available
+func findFirstAvailableProvider(cfg *config.Config, providers map[string]provider.Provider, modelConfig config.ModelConfig) (provider.Provider, string, string, error) {
+	for _, mp := range modelConfig.Providers {
+		prov, exists := providers[mp.Provider]
+		if !exists {
+			continue
+		}
+		providerKey := fmt.Sprintf("%s/%s", mp.Provider, mp.Model)
+		return prov, providerKey, mp.Model, nil
+	}
+	return nil, "", "", fmt.Errorf("no available providers")
+}
+
+// runBenchProviders tests every model on every provider individually
+func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[string]provider.Provider, messages []openai.ChatCompletionMessage) {
+	fmt.Println("=== All Provider Models Benchmark ===")
+	fmt.Printf("Prompt: %s...\n\n", truncate(strings.TrimSpace(messages[0].Content), 50))
+
+	// Sort provider names for consistent output
+	var providerNames []string
+	for name := range cfg.Providers {
+		providerNames = append(providerNames, name)
+	}
+	sort.Strings(providerNames)
+
+	for _, providerName := range providerNames {
+		provConfig := cfg.Providers[providerName]
+		prov, exists := providers[providerName]
+		if !exists {
+			fmt.Printf("Provider: %s - NOT INITIALIZED\n\n", providerName)
+			continue
+		}
+
+		fmt.Printf("Provider: %s\n", providerName)
+		fmt.Printf("  URL: %s\n", provConfig.URL)
+
+		// Sort model names for consistent output
+		models := make([]string, len(provConfig.Models))
+		copy(models, provConfig.Models)
+		sort.Strings(models)
+
+		for _, modelName := range models {
+			fmt.Printf("  Model: %s\n", modelName)
+
+			startTime := time.Now()
+			resp, err := prov.Chat(ctx, modelName, messages, nil)
+			duration := time.Since(startTime)
+
+			if err != nil {
+				fmt.Printf("    Error: %v\n", err)
+				fmt.Printf("    Duration: %v\n", duration)
+			} else {
+				content := resp.Choices[0].Message.Content
+				fmt.Printf("    Response: %s\n", truncate(content, 100))
+				fmt.Printf("    Tokens: prompt=%d, completion=%d, total=%d\n",
+					resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens)
+				fmt.Printf("    Duration: %v\n", duration)
+				if resp.Usage.PromptTokens > 0 {
+					fmt.Printf("    Tokens/sec: %.2f\n", float64(resp.Usage.CompletionTokens)/duration.Seconds())
+				}
+			}
+		}
+		fmt.Println()
+	}
+}
+
+// truncate truncates a string to maxLen characters
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+// formatProviders formats a slice of ModelProvider for display
+func formatProviders(providers []config.ModelProvider) string {
+	var parts []string
+	for _, p := range providers {
+		parts = append(parts, fmt.Sprintf("%s/%s", p.Provider, p.Model))
+	}
+	return strings.Join(parts, ", ")
 }
