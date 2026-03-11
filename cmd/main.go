@@ -29,6 +29,7 @@ import (
 	"github.com/macedot/openmodel/internal/logger"
 	"github.com/macedot/openmodel/internal/provider"
 	"github.com/macedot/openmodel/internal/server"
+	"github.com/macedot/openmodel/internal/server/converters"
 	"github.com/macedot/openmodel/internal/state"
 )
 
@@ -729,7 +730,7 @@ func benchAnthropicEndpoint(ctx context.Context, prov provider.Provider, model s
 
 	// Set headers for Anthropic API
 	headers := map[string]string{
-		"anthropic-version": "2023-06-01",
+		converters.HeaderAnthropicVersion: converters.AnthropicAPIVersion,
 	}
 
 	if stream {

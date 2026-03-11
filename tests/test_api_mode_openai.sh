@@ -7,7 +7,7 @@ time curl -v -s http://127.0.0.1:${PORT}/v1/messages \
     -H "Content-Type: application/json" \
     -H "anthropic-version: 2023-06-01" \
     -d '{
-        "model": "openai-model",
+        "model": "openai",
         "max_tokens": 300,
         "messages": [{"role": "user", "content": "Say hello"}]
     }'

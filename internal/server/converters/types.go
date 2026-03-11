@@ -15,6 +15,12 @@ const (
 	APIFormatPassthrough APIFormat = ""
 )
 
+// Anthropic API constants
+const (
+	HeaderAnthropicVersion = "anthropic-version"
+	AnthropicAPIVersion   = "2023-06-01"
+)
+
 // StreamState holds state for stream conversion
 type StreamState struct {
 	IsFirst  *bool

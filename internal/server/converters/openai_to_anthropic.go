@@ -63,7 +63,7 @@ func (c *OpenAIToAnthropicConverter) GetEndpoint(original string) string {
 // GetHeaders returns Anthropic-specific headers
 func (c *OpenAIToAnthropicConverter) GetHeaders() map[string]string {
 	return map[string]string{
-		"anthropic-version": "2023-06-01",
+		HeaderAnthropicVersion: AnthropicAPIVersion,
 	}
 }
 

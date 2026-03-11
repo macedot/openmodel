@@ -33,14 +33,20 @@ const (
 
 // HTTP Headers
 const (
-	HeaderContentType         = "Content-Type"
-	HeaderAuthorization       = "Authorization"
-	HeaderRequestID           = "X-Request-ID"
-	HeaderRetryAfter          = "Retry-After"
-	HeaderXForwardedFor       = "X-Forwarded-For"
-	HeaderXRealIP             = "X-Real-IP"
-	HeaderXRateLimitLimit     = "X-RateLimit-Limit"
-	HeaderXRateLimitRemaining = "X-RateLimit-Remaining"
+	HeaderContentType          = "Content-Type"
+	HeaderAuthorization        = "Authorization"
+	HeaderRequestID            = "X-Request-ID"
+	HeaderRetryAfter           = "Retry-After"
+	HeaderXForwardedFor        = "X-Forwarded-For"
+	HeaderXRealIP              = "X-Real-IP"
+	HeaderXRateLimitLimit      = "X-RateLimit-Limit"
+	HeaderXRateLimitRemaining  = "X-RateLimit-Remaining"
+	HeaderAnthropicVersion     = "anthropic-version"
+)
+
+// Anthropic API constants
+const (
+	AnthropicAPIVersion = "2023-06-01"
 )
 
 // Content types

@@ -13,7 +13,7 @@ import (
 // handleV1Messages handles POST /v1/messages (Claude API)
 func (s *Server) handleV1Messages(c *fiber.Ctx) error {
 	// Validate required headers (anthropic-version is required)
-	anthropicVersion := c.Get("anthropic-version")
+	anthropicVersion := c.Get(HeaderAnthropicVersion)
 	if anthropicVersion == "" {
 		return handleError(c, "anthropic-version header is required", fiber.StatusBadRequest)
 	}
@@ -63,7 +63,7 @@ func (s *Server) handleV1Messages(c *fiber.Ctx) error {
 
 	// Build headers for Claude API
 	forwardHeaders := map[string]string{
-		"anthropic-version": anthropicVersion,
+		HeaderAnthropicVersion: anthropicVersion,
 	}
 	// Add optional headers
 	if requestID, ok := c.Locals("request_id").(string); ok && requestID != "" {
@@ -88,7 +88,7 @@ func (s *Server) handleV1Messages(c *fiber.Ctx) error {
 		}
 		forwardEndpoint = converter.GetEndpoint(EndpointV1Messages)
 		// Remove anthropic-version header for OpenAI endpoint
-		delete(forwardHeaders, "anthropic-version")
+		delete(forwardHeaders, HeaderAnthropicVersion)
 	}
 
 	if isStreaming {
