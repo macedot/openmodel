@@ -52,7 +52,8 @@ func TestPrintTestUsage(t *testing.T) {
 	defer func() { os.Args = oldArgs }()
 	os.Args = []string{"openmodel"}
 
-	printTestUsage()
+	fs := flag.NewFlagSet("test", flag.ExitOnError)
+	printTestUsage(fs)
 
 	w.Close()
 	var buf bytes.Buffer
@@ -77,7 +78,8 @@ func TestPrintServerUsage(t *testing.T) {
 	defer func() { os.Args = oldArgs }()
 	os.Args = []string{"openmodel"}
 
-	printServerUsage()
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	printServerUsage(fs)
 
 	w.Close()
 	var buf bytes.Buffer
@@ -354,8 +356,6 @@ func TestRunModels_WithNoConfig(t *testing.T) {
 		os.Setenv("HOME", oldHome)
 	}()
 
-	jsonOutput := false
-
 	// This will call config.Load() which returns default config (no models)
 	// Should show "No models configured"
 	oldStderr := os.Stderr
@@ -366,7 +366,7 @@ func TestRunModels_WithNoConfig(t *testing.T) {
 	os.Stderr = w
 	go func() { io.Copy(io.Discard, r) }()
 
-	runModels(&jsonOutput)
+	runModels(false)
 
 	os.Stderr = oldStderr
 }
@@ -398,9 +398,7 @@ func TestRunModels_WithRealConfig(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	jsonOutput := false
-	runModels(&jsonOutput)
-
+	runModels(false)
 	w.Close()
 	var buf bytes.Buffer
 	io.Copy(&buf, r)
@@ -430,9 +428,7 @@ func TestRunModels_JSONWithRealConfig(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	jsonOutput := true
-	runModels(&jsonOutput)
-
+	runModels(true)
 	w.Close()
 	var buf bytes.Buffer
 	io.Copy(&buf, r)
@@ -527,7 +523,8 @@ func TestPrintModelsUsage(t *testing.T) {
 	defer func() { os.Args = oldArgs }()
 	os.Args = []string{"openmodel"}
 
-	printModelsUsage()
+	fs := flag.NewFlagSet("models", flag.ExitOnError)
+	printModelsUsage(fs)
 
 	w.Close()
 	var buf bytes.Buffer
@@ -822,7 +819,8 @@ func TestPrintBenchUsage(t *testing.T) {
 	defer func() { os.Args = oldArgs }()
 	os.Args = []string{"openmodel"}
 
-	printBenchUsage()
+	fs := flag.NewFlagSet("bench", flag.ExitOnError)
+	printBenchUsage(fs)
 
 	w.Close()
 	var buf bytes.Buffer

@@ -36,6 +36,36 @@ var Version = "dev"
 // BuildDate is set at build time via -ldflags "-X main.BuildDate=..."
 var BuildDate = "unknown"
 
+// newTestFlagSet creates a FlagSet for the test command.
+func newTestFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("test", flag.ExitOnError)
+	fs.String("model", "", "Model name to test (tests all if omitted)")
+	return fs
+}
+
+// newModelsFlagSet creates a FlagSet for the models command.
+func newModelsFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("models", flag.ExitOnError)
+	fs.Bool("json", false, "Output in JSON format")
+	return fs
+}
+
+// newBenchFlagSet creates a FlagSet for the bench command.
+func newBenchFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("bench", flag.ExitOnError)
+	fs.String("prompt", "", "Path to file containing the prompt (required)")
+	fs.String("scope", "application", "Scope: application, providers, or all")
+	return fs
+}
+
+// newServeFlagSet creates a FlagSet for the serve command.
+func newServeFlagSet() *flag.FlagSet {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	fs.String("config", "", "Path to config file (default: ~/.config/openmodel/config.json)")
+	fs.Bool("h", false, "Show help")
+	return fs
+}
+
 // MethodResult represents the result of testing a single API method.
 type MethodResult struct {
 	Success bool
@@ -74,46 +104,59 @@ func main() {
 	}
 
 	if command == "test" {
-		modelName := flag.String("model", "", "Model name to test (tests all if omitted)")
+		fs := newTestFlagSet()
+		fs.Usage = func() { printTestUsage(fs) }
 
-		if err := parseCommandFlags(args, printTestUsage); err != nil {
-			return
+		if err := fs.Parse(args); err != nil {
+			os.Exit(1)
 		}
+
+		modelName := fs.Lookup("model").Value.String()
 		runTest(modelName)
 		return
 	}
 
 	if command == "models" {
-		jsonOutput := flag.Bool("json", false, "Output in JSON format")
+		fs := newModelsFlagSet()
+		fs.Usage = func() { printModelsUsage(fs) }
 
-		if err := parseCommandFlags(args, printModelsUsage); err != nil {
-			return
+		if err := fs.Parse(args); err != nil {
+			os.Exit(1)
 		}
+
+		jsonOutput := fs.Lookup("json").Value.(flag.Getter).Get().(bool)
 		runModels(jsonOutput)
 		return
 	}
 
 	if command == "config" {
-		if err := parseCommandFlags(args, printConfigUsage); err != nil {
-			return
+		fs := flag.NewFlagSet("config", flag.ExitOnError)
+		fs.Usage = func() { printConfigUsage() }
+
+		if err := fs.Parse(args); err != nil {
+			os.Exit(1)
 		}
 		runConfig()
 		return
 	}
 
 	if command == "bench" {
-		promptFile := flag.String("prompt", "", "Path to file containing the prompt (required)")
-		scope := flag.String("scope", "application", "Scope: application, providers, or all")
+		fs := newBenchFlagSet()
+		fs.Usage = func() { printBenchUsage(fs) }
 
-		if err := parseCommandFlags(args, printBenchUsage); err != nil {
-			return
-		}
-		if *promptFile == "" {
-			fmt.Fprintf(os.Stderr, "Error: --prompt is required\n\n")
-			printBenchUsage()
+		if err := fs.Parse(args); err != nil {
 			os.Exit(1)
 		}
-		runBench(*promptFile, *scope)
+
+		promptFile := fs.Lookup("prompt").Value.String()
+		scope := fs.Lookup("scope").Value.String()
+
+		if promptFile == "" {
+			fmt.Fprintf(os.Stderr, "Error: -prompt is required\n\n")
+			fs.Usage()
+			os.Exit(1)
+		}
+		runBench(promptFile, scope)
 		return
 	}
 
@@ -123,35 +166,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Serve command - declare flags before parsing
-	configPath := flag.String("config", "", "Path to config file (default: ~/.config/openmodel/config.json)")
-	showHelp := flag.Bool("h", false, "Show help")
+	// Serve command - the default
+	fs := newServeFlagSet()
+	fs.Usage = func() { printServerUsage(fs) }
 
-	if err := parseCommandFlags(args, printServerUsage); err != nil {
-		return
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
 	}
 
-	if *showHelp {
-		printServerUsage()
+	showHelp := fs.Lookup("h").Value.(flag.Getter).Get().(bool)
+	if showHelp {
+		fs.Usage()
 		os.Exit(0)
 	}
 
+	configPath := fs.Lookup("config").Value.String()
 	runServer(configPath)
-}
-
-// parseCommandFlags parses command-line flags with error handling
-func parseCommandFlags(args []string, usage func()) error {
-	err := flag.CommandLine.Parse(args)
-	if err != nil {
-		if err == flag.ErrHelp {
-			usage()
-			os.Exit(0)
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
-		usage()
-		os.Exit(1)
-	}
-	return nil
 }
 
 // initProviders creates and initializes all configured providers
@@ -199,33 +229,32 @@ func printVersion() {
 	}
 }
 
-func printBenchUsage() {
+func printBenchUsage(fs *flag.FlagSet) {
 	fmt.Fprintf(os.Stderr, "Usage: %s bench [options]\n\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "Benchmark models by submitting prompts.\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
-	fmt.Fprintf(os.Stderr, "  -prompt <file>   Path to file containing the prompt (required)\n")
-	fmt.Fprintf(os.Stderr, "  -scope <mode>    Scope: application, providers, or all (default: application)\n")
+	fs.PrintDefaults()
 	fmt.Fprintf(os.Stderr, "\nScope modes:\n")
 	fmt.Fprintf(os.Stderr, "  application  Test each model alias (uses configured failover chains)\n")
 	fmt.Fprintf(os.Stderr, "  providers    Test every model on every provider individually\n")
 	fmt.Fprintf(os.Stderr, "  all          Run both application and providers modes\n")
 }
 
-func runServer(configPath *string) {
+func runServer(configPath string) {
 	// Load config from specified path or default location
 	var cfg *config.Config
 	var err error
 
-	if *configPath != "" {
+	if configPath != "" {
 		// Validate custom config path exists
-		if _, err := os.Stat(*configPath); os.IsNotExist(err) {
-			log.Fatalf("Config file not found: %s", *configPath)
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			log.Fatalf("Config file not found: %s", configPath)
 		}
-		cfg, err = config.LoadFromPath(*configPath)
+		cfg, err = config.LoadFromPath(configPath)
 		if err != nil {
 			log.Fatalf("Failed to load config: %v", err)
 		}
-		logger.Info("Config loaded from custom path", "config_path", *configPath)
+		logger.Info("Config loaded from custom path", "config_path", configPath)
 	} else {
 		cfg, err = config.Load()
 		if err != nil {
@@ -277,23 +306,22 @@ func runServer(configPath *string) {
 	}
 }
 
-func printTestUsage() {
+func printTestUsage(fs *flag.FlagSet) {
 	fmt.Fprintf(os.Stderr, "Usage: %s test [options]\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "\nOptions:\n")
-	flag.PrintDefaults()
+	fs.PrintDefaults()
 }
 
-func printServerUsage() {
+func printServerUsage(fs *flag.FlagSet) {
 	fmt.Fprintf(os.Stderr, "Usage: %s serve [options]\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "\nOptions:\n")
-	fmt.Fprintf(os.Stderr, "  --config string   Path to config file (default: ~/.config/openmodel/config.json)\n")
-	fmt.Fprintf(os.Stderr, "  -h               Show help\n")
+	fs.PrintDefaults()
 }
 
-func printModelsUsage() {
+func printModelsUsage(fs *flag.FlagSet) {
 	fmt.Fprintf(os.Stderr, "Usage: %s models [options]\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "\nOptions:\n")
-	flag.PrintDefaults()
+	fs.PrintDefaults()
 }
 
 func printConfigUsage() {
@@ -303,10 +331,10 @@ func printConfigUsage() {
 	fmt.Fprintf(os.Stderr, "Only prints errors if validation fails.\n")
 }
 
-func runModels(jsonOutput *bool) {
+func runModels(jsonOutput bool) {
 	if flag.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "Error: unexpected argument: %s\n\n", flag.Arg(0))
-		printModelsUsage()
+		printModelsUsage(flag.NewFlagSet("models", flag.ExitOnError))
 		os.Exit(1)
 	}
 
@@ -369,7 +397,7 @@ func runModels(jsonOutput *bool) {
 		models[0].Default = true
 	}
 
-	if *jsonOutput {
+	if jsonOutput {
 		data, err := json.MarshalIndent(models, "", "  ")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to marshal JSON: %v\n", err)
@@ -420,10 +448,10 @@ func runConfig() {
 	fmt.Println(configPath)
 }
 
-func runTest(modelName *string) {
+func runTest(modelName string) {
 	if flag.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "Error: unexpected argument: %s\n\n", flag.Arg(0))
-		printTestUsage()
+		printTestUsage(flag.NewFlagSet("test", flag.ExitOnError))
 		os.Exit(1)
 	}
 
@@ -442,13 +470,13 @@ func runTest(modelName *string) {
 
 	providers := initProviders(cfg)
 
-	if *modelName != "" {
-		logger.Info("Testing specific model", "model", *modelName)
+	if modelName != "" {
+		logger.Info("Testing specific model", "model", modelName)
 	} else {
 		logger.Info("Testing all configured models")
 	}
 
-	failed := runTests(providers, cfg, *modelName)
+	failed := runTests(providers, cfg, modelName)
 
 	if failed > 0 {
 		os.Exit(1)
