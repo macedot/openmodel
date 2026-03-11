@@ -42,7 +42,6 @@ var BuildDate = "unknown"
 // newModelsFlagSet creates a FlagSet for the models command.
 func newModelsFlagSet() *flag.FlagSet {
 	fs := flag.NewFlagSet("models", flag.ExitOnError)
-	fs.Bool("json", false, "Output in JSON format")
 	return fs
 }
 
@@ -93,73 +92,20 @@ func main() {
 		os.Exit(0)
 	}
 
-	if command == "models" {
-		fs := newModelsFlagSet()
-		fs.Usage = func() { printModelsUsage(fs) }
-
-		if err := fs.Parse(args); err != nil {
-			os.Exit(1)
-		}
-
-		jsonOutput := fs.Lookup("json").Value.(flag.Getter).Get().(bool)
-		runModels(jsonOutput)
-		return
-	}
-
-	if command == "config" {
-		fs := flag.NewFlagSet("config", flag.ExitOnError)
-		fs.Usage = func() { printConfigUsage() }
-
-		if err := fs.Parse(args); err != nil {
-			os.Exit(1)
-		}
-		runConfig()
-		return
-	}
-
-	if command == "bench" {
-		fs := newBenchFlagSet()
-		fs.Usage = func() { printBenchUsage(fs) }
-
-		if err := fs.Parse(args); err != nil {
-			os.Exit(1)
-		}
-
-		promptFile := fs.Lookup("prompt").Value.String()
-		scope := fs.Lookup("scope").Value.String()
-		stream := fs.Lookup("stream").Value.(flag.Getter).Get().(bool)
-
-		if promptFile == "" {
-			fmt.Fprintf(os.Stderr, "Error: -prompt is required\n\n")
-			fs.Usage()
-			os.Exit(1)
-		}
-		runBench(promptFile, scope, stream)
-		return
-	}
-
-	if command != "serve" {
+	switch command {
+	case "serve":
+		runServeCmd(args)
+	case "models":
+		runModelsCmd(args)
+	case "config":
+		runConfigCmd(args)
+	case "bench":
+		runBenchCmd(args)
+	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown command: %s\n\n", command)
 		printUsage()
 		os.Exit(1)
 	}
-
-	// Serve command - the default
-	fs := newServeFlagSet()
-	fs.Usage = func() { printServerUsage(fs) }
-
-	if err := fs.Parse(args); err != nil {
-		os.Exit(1)
-	}
-
-	showHelp := fs.Lookup("h").Value.(flag.Getter).Get().(bool)
-	if showHelp {
-		fs.Usage()
-		os.Exit(0)
-	}
-
-	configPath := fs.Lookup("config").Value.String()
-	runServer(configPath)
 }
 
 // initProviders creates and initializes all configured providers
@@ -184,41 +130,8 @@ func initProviders(cfg *config.Config) map[string]provider.Provider {
 	return providers
 }
 
-func printUsage() {
-	fmt.Fprintf(os.Stderr, "Usage: %s [command]\n", os.Args[0])
-	fmt.Fprintf(os.Stderr, "\nCommands:\n")
-	fmt.Fprintf(os.Stderr, "  serve    Start the OpenModel server\n")
-	fmt.Fprintf(os.Stderr, "  models   List available models\n")
-	fmt.Fprintf(os.Stderr, "  config   Find and validate config file\n")
-	fmt.Fprintf(os.Stderr, "  bench    Benchmark models with prompts\n")
-	fmt.Fprintf(os.Stderr, "\nOptions:\n")
-	fmt.Fprintf(os.Stderr, "  -h, --help    Show help\n")
-	fmt.Fprintf(os.Stderr, "  -v, --version Show version\n")
-	fmt.Fprintf(os.Stderr, "\nServe options:\n")
-	fmt.Fprintf(os.Stderr, "  --config <path>   Path to config file (default: ~/.config/openmodel/config.json)\n")
-	fmt.Fprintf(os.Stderr, "\nRun '%s <command> -h' for more information on a command.\n", os.Args[0])
-}
-
-func printVersion() {
-	fmt.Printf("openmodel version %s\n", Version)
-	if BuildDate != "unknown" {
-		fmt.Printf("build date: %s\n", BuildDate)
-	}
-}
-
-func printBenchUsage(fs *flag.FlagSet) {
-	fmt.Fprintf(os.Stderr, "Usage: %s bench [options]\n\n", os.Args[0])
-	fmt.Fprintf(os.Stderr, "Benchmark models by submitting prompts.\n\n")
-	fmt.Fprintf(os.Stderr, "Options:\n")
-	fs.PrintDefaults()
-	fmt.Fprintf(os.Stderr, "\nScope modes:\n")
-	fmt.Fprintf(os.Stderr, "  application  Test each model alias (uses configured failover chains)\n")
-	fmt.Fprintf(os.Stderr, "  providers    Test every model on every provider individually\n")
-	fmt.Fprintf(os.Stderr, "  all          Run both application and providers modes\n")
-}
-
-func runServer(configPath string) {
-	// Load config from specified path or default location
+// loadAndValidateConfig loads config, initializes logger, validates, and returns cfg
+func loadAndValidateConfig(configPath string) *config.Config {
 	var cfg *config.Config
 	var err error
 
@@ -265,6 +178,64 @@ func runServer(configPath string) {
 		log.Fatalf("Configuration error:\n%v", err)
 	}
 
+	return cfg
+}
+
+func printUsage() {
+	fmt.Fprintf(os.Stderr, "Usage: %s [command]\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "\nCommands:\n")
+	fmt.Fprintf(os.Stderr, "  serve    Start the OpenModel server\n")
+	fmt.Fprintf(os.Stderr, "  models   List available models\n")
+	fmt.Fprintf(os.Stderr, "  config   Find and validate config file\n")
+	fmt.Fprintf(os.Stderr, "  bench    Benchmark models with prompts\n")
+	fmt.Fprintf(os.Stderr, "\nOptions:\n")
+	fmt.Fprintf(os.Stderr, "  -h, --help    Show help\n")
+	fmt.Fprintf(os.Stderr, "  -v, --version Show version\n")
+	fmt.Fprintf(os.Stderr, "\nServe options:\n")
+	fmt.Fprintf(os.Stderr, "  --config <path>   Path to config file (default: ~/.config/openmodel/config.json)\n")
+	fmt.Fprintf(os.Stderr, "\nRun '%s <command> -h' for more information on a command.\n", os.Args[0])
+}
+
+func printVersion() {
+	fmt.Printf("openmodel version %s\n", Version)
+	if BuildDate != "unknown" {
+		fmt.Printf("build date: %s\n", BuildDate)
+	}
+}
+
+func printBenchUsage(fs *flag.FlagSet) {
+	fmt.Fprintf(os.Stderr, "Usage: %s bench [options]\n\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "Benchmark models by submitting prompts.\n\n")
+	fmt.Fprintf(os.Stderr, "Options:\n")
+	fs.PrintDefaults()
+	fmt.Fprintf(os.Stderr, "\nScope modes:\n")
+	fmt.Fprintf(os.Stderr, "  application  Test each model alias (uses configured failover chains)\n")
+	fmt.Fprintf(os.Stderr, "  providers    Test every model on every provider individually\n")
+	fmt.Fprintf(os.Stderr, "  all          Run both application and providers modes\n")
+}
+
+// runServeCmd handles the serve command
+func runServeCmd(args []string) {
+	fs := newServeFlagSet()
+	fs.Usage = func() { printServerUsage(fs) }
+
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
+	showHelp := fs.Lookup("h").Value.(flag.Getter).Get().(bool)
+	if showHelp {
+		fs.Usage()
+		os.Exit(0)
+	}
+
+	configPath := fs.Lookup("config").Value.String()
+	cfg := loadAndValidateConfig(configPath)
+	runServer(cfg)
+}
+
+// runServer starts the HTTP server with the given config
+func runServer(cfg *config.Config) {
 	providers := initProviders(cfg)
 
 	stateMgr := state.New(10000) // 10 second initial timeout
@@ -308,10 +279,18 @@ func printConfigUsage() {
 	fmt.Fprintf(os.Stderr, "Only prints errors if validation fails.\n")
 }
 
-func runModels(jsonOutput bool) {
+// runModelsCmd handles the models command
+func runModelsCmd(args []string) {
+	fs := newModelsFlagSet()
+	fs.Usage = func() { printModelsUsage(fs) }
+
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
 	if flag.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "Error: unexpected argument: %s\n\n", flag.Arg(0))
-		printModelsUsage(flag.NewFlagSet("models", flag.ExitOnError))
+		fs.Usage()
 		os.Exit(1)
 	}
 
@@ -321,6 +300,21 @@ func runModels(jsonOutput bool) {
 		os.Exit(1)
 	}
 
+	printModels(cfg)
+}
+
+// runModels is a wrapper for backward compatibility with tests
+func runModels(_ bool) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+	printModels(cfg)
+}
+
+// printModels displays the configured models
+func printModels(cfg *config.Config) {
 	// Build grouped models from config
 	type providerInfo struct {
 		Provider string `json:"provider"`
@@ -374,31 +368,33 @@ func runModels(jsonOutput bool) {
 		models[0].Default = true
 	}
 
-	if jsonOutput {
-		data, err := json.MarshalIndent(models, "", "  ")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to marshal JSON: %v\n", err)
-			os.Exit(1)
+	if len(models) == 0 {
+		fmt.Println("No models configured")
+		return
+	}
+	fmt.Println("Available models:")
+	fmt.Println()
+	for _, m := range models {
+		defaultMarker := ""
+		if m.Default {
+			defaultMarker = " (default)"
 		}
-		fmt.Println(string(data))
-	} else {
-		if len(models) == 0 {
-			fmt.Println("No models configured")
-			return
-		}
-		fmt.Println("Available models:")
-		fmt.Println()
-		for _, m := range models {
-			defaultMarker := ""
-			if m.Default {
-				defaultMarker = " (default)"
-			}
-			fmt.Printf("  %s%s\n", m.Name, defaultMarker)
-			for _, p := range m.Providers {
-				fmt.Printf("    provider: %s, model: %s\n", p.Provider, p.Model)
-			}
+		fmt.Printf("  %s%s\n", m.Name, defaultMarker)
+		for _, p := range m.Providers {
+			fmt.Printf("    provider: %s, model: %s\n", p.Provider, p.Model)
 		}
 	}
+}
+
+// runConfigCmd handles the config command
+func runConfigCmd(args []string) {
+	fs := flag.NewFlagSet("config", flag.ExitOnError)
+	fs.Usage = func() { printConfigUsage() }
+
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+	runConfig()
 }
 
 func runConfig() {
@@ -423,6 +419,27 @@ func runConfig() {
 
 	// Only print path on success
 	fmt.Println(configPath)
+}
+
+// runBenchCmd handles the bench command
+func runBenchCmd(args []string) {
+	fs := newBenchFlagSet()
+	fs.Usage = func() { printBenchUsage(fs) }
+
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+
+	promptFile := fs.Lookup("prompt").Value.String()
+	scope := fs.Lookup("scope").Value.String()
+	stream := fs.Lookup("stream").Value.(flag.Getter).Get().(bool)
+
+	if promptFile == "" {
+		fmt.Fprintf(os.Stderr, "Error: -prompt is required\n\n")
+		fs.Usage()
+		os.Exit(1)
+	}
+	runBench(promptFile, scope, stream)
 }
 
 // runBench executes benchmark tests based on scope mode
