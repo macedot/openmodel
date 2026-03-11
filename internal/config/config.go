@@ -129,6 +129,7 @@ func (c *Config) GetLimits() LimitsConfig {
 type ModelConfig struct {
 	Strategy  string          `json:"strategy"`  // "fallback" | "round-robin" | "random", default "fallback"
 	Default   bool            `json:"default"`   // If true, this model is the default when no model is specified
+	ApiMode   string          `json:"api_mode"`  // "openai" | "anthropic" | "" (empty = passthrough)
 	Providers []ModelProvider `json:"providers"` // Resolved model providers
 }
 
@@ -721,6 +722,12 @@ func parseConfig(data []byte, validateSchema bool) (*Config, error) {
 			if strategy, ok := v["strategy"].(string); ok && strategy != "" {
 				modelConfig.Strategy = strategy
 			}
+			if apiMode, ok := v["api_mode"].(string); ok {
+				modelConfig.ApiMode = apiMode
+			}
+			if defaultVal, ok := v["default"].(bool); ok {
+				modelConfig.Default = defaultVal
+			}
 			if providersRaw, ok := v["providers"].([]any); ok {
 				providers, err := parseModelEntries(cfg, modelName, providersRaw, visited)
 				if err != nil {
@@ -791,6 +798,27 @@ func (c *Config) ValidateDefaultModels() error {
 
 	if len(defaultModels) > 1 {
 		return fmt.Errorf("multiple models marked as default: %s (only one model can be default)", strings.Join(defaultModels, ", "))
+	}
+	return nil
+}
+
+// ValidateApiModes checks that all api_mode values are valid.
+// Returns an error if any model has an invalid api_mode.
+func (c *Config) ValidateApiModes() error {
+	validApiModes := map[string]bool{"": true, "openai": true, "anthropic": true}
+	var errs []string
+
+	for modelName, modelConfig := range c.Models {
+		if !validApiModes[modelConfig.ApiMode] {
+			errs = append(errs, fmt.Sprintf(
+				"  model %q has invalid api_mode: %q (must be 'openai', 'anthropic', or empty)",
+				modelName, modelConfig.ApiMode))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("api_mode validation failed:\n%s",
+			strings.Join(errs, "\n"))
 	}
 	return nil
 }

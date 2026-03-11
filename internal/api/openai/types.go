@@ -299,6 +299,15 @@ func StreamResponseToChunk(data []byte) (*ChatCompletionChunk, error) {
 	return &chunk, nil
 }
 
+// ParseChatCompletionRequest parses raw JSON into ChatCompletionRequest
+func ParseChatCompletionRequest(data []byte) (*ChatCompletionRequest, error) {
+	var req ChatCompletionRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		return nil, err
+	}
+	return &req, nil
+}
+
 // IsStreamDone checks if the stream is finished (chunk has finish_reason set or is [DONE])
 func IsStreamDone(line string) bool {
 	return line == "[DONE]" || line == "data: [DONE]"

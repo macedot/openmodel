@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/macedot/openmodel/internal/api/anthropic"
 	"github.com/macedot/openmodel/internal/api/openai"
 	"github.com/macedot/openmodel/internal/config"
 	applogger "github.com/macedot/openmodel/internal/logger"
@@ -45,6 +47,13 @@ func (s *Server) handleV1ChatCompletions(c *fiber.Ctx) error {
 		return handleError(c, err.Error(), fiber.StatusNotFound)
 	}
 
+	// Check if model has api_mode configured
+	modelConfig, hasModelConfig := s.config.Models[model]
+	apiMode := ""
+	if hasModelConfig && modelConfig.ApiMode != "" {
+		apiMode = modelConfig.ApiMode
+	}
+
 	// Set original URL in context for tracing
 	ctx := context.WithValue(c.UserContext(), "original_url", c.OriginalURL())
 	ctx = context.WithValue(ctx, "request_id", c.Locals("request_id"))
@@ -61,22 +70,59 @@ func (s *Server) handleV1ChatCompletions(c *fiber.Ctx) error {
 		}
 	}
 
+	// Convert request if api_mode is set
+	forwardBody := body
+	forwardEndpoint := "/v1/chat/completions"
+
+	if apiMode == "anthropic" {
+		// Convert OpenAI request to Anthropic format
+		openaiReq, err := openai.ParseChatCompletionRequest(body)
+		if err != nil {
+			return handleError(c, "failed to parse request: "+err.Error(), fiber.StatusBadRequest)
+		}
+		anthropicReq := anthropic.OpenAIToAnthropicRequest(openaiReq)
+		forwardBody, err = json.Marshal(anthropicReq)
+		if err != nil {
+			return handleError(c, "failed to convert request", fiber.StatusInternalServerError)
+		}
+		forwardEndpoint = "/v1/messages"
+		// Add anthropic-version header
+		forwardHeaders["anthropic-version"] = "2023-06-01"
+	}
+
 	if isStreaming {
 		// For streaming, use streamWithFailover for automatic retry
-		return s.streamWithFailoverFiber(c, model, body, forwardHeaders, ctx)
+		return s.streamWithFailoverFiber(c, model, forwardBody, forwardHeaders, ctx, apiMode)
 	}
 
 	// Non-streaming: forward request
-	resp, providerKey, err := s.executeWithFailoverFiber(ctx, model, body, forwardHeaders, "/v1/chat/completions")
+	resp, providerKey, err := s.executeWithFailoverFiber(ctx, model, forwardBody, forwardHeaders, forwardEndpoint)
 	if err != nil {
 		s.handleAllProvidersFailedFiber(c, err)
 		return nil
 	}
 
-	// Return response as-is (already JSON bytes)
+	// Convert response if needed
+	var finalResp []byte
+	if apiMode == "anthropic" {
+		// Convert Anthropic response back to OpenAI format
+		var anthropicResp anthropic.MessagesResponse
+		if err := json.Unmarshal(resp.([]byte), &anthropicResp); err != nil {
+			return handleError(c, "failed to parse response", fiber.StatusInternalServerError)
+		}
+		openaiResp := anthropic.AnthropicToOpenAIResponse(&anthropicResp)
+		finalResp, err = json.Marshal(openaiResp)
+		if err != nil {
+			return handleError(c, "failed to convert response", fiber.StatusInternalServerError)
+		}
+	} else {
+		finalResp = resp.([]byte)
+	}
+
+	// Return response
 	s.state.ResetModel(providerKey)
 	c.Set("Content-Type", "application/json")
-	return c.Send(resp.([]byte))
+	return c.Send(finalResp)
 }
 
 // handleV1Messages handles POST /v1/messages (Claude API)
@@ -108,6 +154,13 @@ func (s *Server) handleV1Messages(c *fiber.Ctx) error {
 		})
 	}
 
+	// Check if model has api_mode configured
+	modelConfig, hasModelConfig := s.config.Models[model]
+	apiMode := ""
+	if hasModelConfig && modelConfig.ApiMode != "" {
+		apiMode = modelConfig.ApiMode
+	}
+
 	// Set original URL in context for tracing
 	ctx := context.WithValue(c.UserContext(), "original_url", c.OriginalURL())
 	ctx = context.WithValue(ctx, "request_id", c.Locals("request_id"))
@@ -130,21 +183,58 @@ func (s *Server) handleV1Messages(c *fiber.Ctx) error {
 		forwardHeaders["X-Request-ID"] = requestID
 	}
 
+	// Convert request if api_mode is set
+	forwardBody := body
+	forwardEndpoint := "/v1/messages"
+
+	if apiMode == "openai" {
+		// Convert Anthropic request to OpenAI format
+		anthropicReq, err := anthropic.ParseMessagesRequest(body)
+		if err != nil {
+			return handleError(c, "failed to parse request: "+err.Error(), fiber.StatusBadRequest)
+		}
+		openaiReq := anthropic.AnthropicToOpenAIRequest(anthropicReq)
+		forwardBody, err = json.Marshal(openaiReq)
+		if err != nil {
+			return handleError(c, "failed to convert request", fiber.StatusInternalServerError)
+		}
+		forwardEndpoint = "/v1/chat/completions"
+		// Remove anthropic-version header for OpenAI endpoint
+		delete(forwardHeaders, "anthropic-version")
+	}
+
 	if isStreaming {
-		return s.streamWithFailoverFiberClaude(c, model, body, forwardHeaders, ctx)
+		return s.streamWithFailoverFiberClaude(c, model, forwardBody, forwardHeaders, ctx, apiMode)
 	}
 
 	// Non-streaming request
-	resp, providerKey, err := s.executeWithFailoverFiber(ctx, model, body, forwardHeaders, "/v1/messages")
+	resp, providerKey, err := s.executeWithFailoverFiber(ctx, model, forwardBody, forwardHeaders, forwardEndpoint)
 	if err != nil {
 		s.handleAllProvidersFailedFiber(c, err)
 		return nil
 	}
 
-	// Response is already in Claude format, return as-is
+	// Convert response if needed
+	var finalResp []byte
+	if apiMode == "openai" {
+		// Convert OpenAI response back to Anthropic format
+		var openaiResp openai.ChatCompletionResponse
+		if err := json.Unmarshal(resp.([]byte), &openaiResp); err != nil {
+			return handleError(c, "failed to parse response", fiber.StatusInternalServerError)
+		}
+		anthropicResp := anthropic.OpenAIToAnthropicResponse(&openaiResp)
+		finalResp, err = json.Marshal(anthropicResp)
+		if err != nil {
+			return handleError(c, "failed to convert response", fiber.StatusInternalServerError)
+		}
+	} else {
+		finalResp = resp.([]byte)
+	}
+
+	// Response is in Claude format
 	s.state.ResetModel(providerKey)
 	c.Set("Content-Type", "application/json")
-	return c.Send(resp.([]byte))
+	return c.Send(finalResp)
 }
 
 // extractForwardHeaders extracts headers that should be forwarded to providers
@@ -262,7 +352,7 @@ func (s *Server) executeWithFailoverFiber(ctx context.Context, model string, bod
 }
 
 // streamWithFailoverFiber handles streaming requests with failover for OpenAI format
-func (s *Server) streamWithFailoverFiber(c *fiber.Ctx, model string, body []byte, headers map[string]string, ctx context.Context) error {
+func (s *Server) streamWithFailoverFiber(c *fiber.Ctx, model string, body []byte, headers map[string]string, ctx context.Context, apiMode string) error {
 	var triedProviders []string
 	requestID, _ := c.Locals("request_id").(string)
 
@@ -309,17 +399,37 @@ func (s *Server) streamWithFailoverFiber(c *fiber.Ctx, model string, body []byte
 				return
 			}
 
+			// Track state for stream conversion if needed
+			streamID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
+
 			for line := range stream {
-				if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
-					applogger.Info("client_disconnected", "request_id", requestID, "provider", providerKey)
-					return
+				lineStr := string(line)
+				// Convert stream format if apiMode is set
+				if apiMode == "anthropic" {
+					// Provider sends Anthropic format, convert to OpenAI for client
+					converted := anthropic.ConvertAnthropicStreamToOpenAI(lineStr, model, streamID)
+					if converted == "" {
+						continue // Skip events that have no OpenAI equivalent
+					}
+					if _, err := fmt.Fprintf(w, "%s\n", converted); err != nil {
+						applogger.Info("client_disconnected", "request_id", requestID, "provider", providerKey)
+						return
+					}
+				} else {
+					// Passthrough - write line as-is
+					if _, err := fmt.Fprintf(w, "%s\n", lineStr); err != nil {
+						applogger.Info("client_disconnected", "request_id", requestID, "provider", providerKey)
+						return
+					}
 				}
 				w.Flush()
 			}
 
-			// Write [DONE] marker
-			fmt.Fprintf(w, "data: [DONE]\n\n")
-			w.Flush()
+			// Write [DONE] marker for OpenAI format
+			if apiMode != "anthropic" {
+				fmt.Fprintf(w, "data: [DONE]\n\n")
+				w.Flush()
+			}
 
 			s.state.ResetModel(providerKey)
 		})
@@ -328,9 +438,15 @@ func (s *Server) streamWithFailoverFiber(c *fiber.Ctx, model string, body []byte
 }
 
 // streamWithFailoverFiberClaude handles streaming requests for Claude format
-func (s *Server) streamWithFailoverFiberClaude(c *fiber.Ctx, model string, body []byte, headers map[string]string, ctx context.Context) error {
+func (s *Server) streamWithFailoverFiberClaude(c *fiber.Ctx, model string, body []byte, headers map[string]string, ctx context.Context, apiMode string) error {
 	var triedProviders []string
 	requestID, _ := c.Locals("request_id").(string)
+
+	// Determine endpoint based on apiMode
+	endpoint := "/v1/messages"
+	if apiMode == "openai" {
+		endpoint = "/v1/chat/completions"
+	}
 
 	for {
 		prov, providerKey, providerModel, err := s.findProviderWithFailover(model, "")
@@ -365,7 +481,7 @@ func (s *Server) streamWithFailoverFiberClaude(c *fiber.Ctx, model string, body 
 		c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
 			defer w.Flush()
 
-			stream, err := prov.DoStreamRequest(ctx, "/v1/messages", provBody, headers)
+			stream, err := prov.DoStreamRequest(ctx, endpoint, provBody, headers)
 			if err != nil {
 				applogger.Warn("provider_stream_failed",
 					"request_id", requestID,
@@ -375,11 +491,30 @@ func (s *Server) streamWithFailoverFiberClaude(c *fiber.Ctx, model string, body 
 				return
 			}
 
+			// Track state for stream conversion if needed
+			var isFirst bool = true
+			var blockIdx int = 0
+			streamID := fmt.Sprintf("msg-%d", time.Now().UnixNano())
+
 			for line := range stream {
-				// Claude SSE format - write line as-is
-				if _, err := fmt.Fprintf(w, "%s\n", line); err != nil {
-					applogger.Info("client_disconnected", "request_id", requestID, "provider", providerKey)
-					return
+				lineStr := string(line)
+				// Convert stream format if apiMode is set
+				if apiMode == "openai" {
+					// Provider sends OpenAI format, convert to Anthropic for client
+					converted := anthropic.ConvertOpenAIStreamToAnthropic(lineStr, model, streamID, &isFirst, &blockIdx)
+					if converted == "" {
+						continue // Skip events that have no Anthropic equivalent
+					}
+					if _, err := fmt.Fprintf(w, "%s\n", converted); err != nil {
+						applogger.Info("client_disconnected", "request_id", requestID, "provider", providerKey)
+						return
+					}
+				} else {
+					// Passthrough - write line as-is (Claude SSE format)
+					if _, err := fmt.Fprintf(w, "%s\n", lineStr); err != nil {
+						applogger.Info("client_disconnected", "request_id", requestID, "provider", providerKey)
+						return
+					}
 				}
 				w.Flush()
 			}

@@ -217,6 +217,11 @@ func runServer(configPath *string) {
 		log.Fatalf("Configuration error: %v", err)
 	}
 
+	// Validate api_mode values
+	if err := cfg.ValidateApiModes(); err != nil {
+		log.Fatalf("Configuration error:\n%v", err)
+	}
+
 	providers := initProviders(cfg)
 
 	stateMgr := state.New(10000) // 10 second initial timeout
