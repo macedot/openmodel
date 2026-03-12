@@ -3,6 +3,7 @@ package config
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -11,14 +12,15 @@ import (
 type Watcher struct {
 	configPath string
 	watcher    *fsnotify.Watcher
-	callback   func(*Config)
+	callback   func(*Config, error)
 	mu         sync.RWMutex
 	stopCh     chan struct{}
-	running    bool
+	running    atomic.Bool
 }
 
 // NewWatcher creates a new config watcher
-func NewWatcher(configPath string, callback func(*Config)) *Watcher {
+// The callback receives the new config and any validation error
+func NewWatcher(configPath string, callback func(*Config, error)) *Watcher {
 	return &Watcher{
 		configPath: configPath,
 		callback:   callback,
@@ -28,10 +30,14 @@ func NewWatcher(configPath string, callback func(*Config)) *Watcher {
 
 // Start begins watching for config file changes
 func (w *Watcher) Start() error {
+	if w.running.Load() {
+		return nil
+	}
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if w.running {
+	if w.running.Load() {
 		return nil
 	}
 
@@ -46,7 +52,7 @@ func (w *Watcher) Start() error {
 	}
 
 	w.watcher = watcher
-	w.running = true
+	w.running.Store(true)
 
 	go w.watchLoop()
 
@@ -78,37 +84,48 @@ func (w *Watcher) watchLoop() {
 func (w *Watcher) handleConfigChange() {
 	cfg, err := Load(w.configPath)
 	if err != nil {
-		// Log error but don't stop watching
+		w.callCallback(nil, err)
 		return
 	}
 
 	// Validate the config
 	if err := cfg.ValidateProviderReferences(); err != nil {
+		w.callCallback(nil, err)
 		return
 	}
 	if err := cfg.ValidateDefaultModels(); err != nil {
+		w.callCallback(nil, err)
 		return
 	}
 	if err := cfg.ValidateApiModes(); err != nil {
+		w.callCallback(nil, err)
 		return
 	}
 
-	// Call the callback with the valid config
+	w.callCallback(cfg, nil)
+}
+
+// callCallback safely invokes the callback
+func (w *Watcher) callCallback(cfg *Config, err error) {
 	w.mu.RLock()
 	callback := w.callback
 	w.mu.RUnlock()
 
 	if callback != nil {
-		callback(cfg)
+		callback(cfg, err)
 	}
 }
 
 // Stop stops the watcher
 func (w *Watcher) Stop() {
+	if !w.running.Load() {
+		return
+	}
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if !w.running {
+	if !w.running.Load() {
 		return
 	}
 
@@ -116,5 +133,10 @@ func (w *Watcher) Stop() {
 	if w.watcher != nil {
 		w.watcher.Close()
 	}
-	w.running = false
+	w.running.Store(false)
+}
+
+// IsRunning returns whether the watcher is currently running
+func (w *Watcher) IsRunning() bool {
+	return w.running.Load()
 }

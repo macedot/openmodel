@@ -235,22 +235,11 @@ func runServer(cfg *config.Config) {
 	configPath := cfg.GetConfigPath()
 	var watcher *config.Watcher
 	if configPath != "" {
-		watcher = config.NewWatcher(configPath, func(newCfg *config.Config) {
-			// Validate the new config
-			if err := newCfg.ValidateProviderReferences(); err != nil {
-				logger.Error("config_reload_failed: invalid provider references", "error", err)
+		watcher = config.NewWatcher(configPath, func(newCfg *config.Config, err error) {
+			if err != nil {
+				logger.Error("config_reload_failed", "error", err)
 				return
 			}
-			if err := newCfg.ValidateDefaultModels(); err != nil {
-				logger.Error("config_reload_failed: invalid default models", "error", err)
-				return
-			}
-			if err := newCfg.ValidateApiModes(); err != nil {
-				logger.Error("config_reload_failed: invalid api_modes", "error", err)
-				return
-			}
-
-			// Reload the config in the server
 			if err := srv.ReloadConfig(newCfg); err != nil {
 				logger.Error("config_reload_failed", "error", err)
 				return
@@ -264,6 +253,8 @@ func runServer(cfg *config.Config) {
 			defer watcher.Stop()
 		}
 	}
+
+
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)

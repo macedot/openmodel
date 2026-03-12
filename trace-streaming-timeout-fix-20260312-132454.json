@@ -1,8 +1,0 @@
-{
-  "event": "streaming_timeout_fix",
-  "description": "Fixed streaming timeout issue",
-  "issue": "http.Client.Timeout was applying to entire request lifecycle including response body reading",
-  "solution": "Use transport-level timeouts only for streaming - DialTimeout, TLSHandshakeTimeout, ResponseHeaderTimeout",
-  "impact": "Streaming responses can now continue indefinitely as long as data chunks arrive",
-  "timestamp": "2026-03-12T13:30:00Z"
-}
