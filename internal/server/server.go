@@ -240,10 +240,13 @@ func (s *Server) ReloadConfig(cfg *config.Config) error {
 		newProviders[name] = provider.NewOpenAIProviderWithConfig(name, pc.URL, pc.APIKey, pc.ApiMode, httpConfig)
 	}
 
-	// Atomically swap config and providers
-	s.providersMu.Lock()
-	defer s.providersMu.Unlock()
-	
+	// Close old providers to release resources
+	for _, p := range s.providers {
+		if closer, ok := p.(interface{ Close() error }); ok {
+			closer.Close()
+		}
+	}
+
 	s.config = cfg
 	s.providers = newProviders
 
@@ -262,6 +265,7 @@ func (s *Server) ReloadConfig(cfg *config.Config) error {
 	} else {
 		s.limiter = nil
 	}
+
 	// Write trace file if trace level is enabled
 	applogger.TraceFile("config-reload-"+time.Now().Format("20060102-150405"), map[string]any{
 		"config_path":   cfg.GetConfigPath(),

@@ -63,4 +63,8 @@ type Provider interface {
 	CompletionProvider
 	Embed(ctx context.Context, model string, input []string) (*openai.EmbeddingResponse, error)
 	Moderate(ctx context.Context, input string) (*openai.ModerationResponse, error)
+
+	// Close releases resources associated with the provider.
+	// Should be called when the provider is no longer needed.
+	Close() error
 }

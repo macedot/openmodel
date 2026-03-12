@@ -153,7 +153,7 @@ func (p *OpenAIProvider) StreamChat(ctx context.Context, model string, messages 
 
 	// Use streaming client (no timeout) for streaming requests - timeout applies only to
 	// connection establishment and header reception, not to reading streaming body
-	resp, err := p.streamingClient().Do(httpReq.WithContext(ctx))
+	resp, err := p.getStreamingClient().Do(httpReq.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -216,7 +216,7 @@ func (p *OpenAIProvider) StreamChatRaw(ctx context.Context, model string, messag
 	}
 
 	// Use streaming client (no timeout) for streaming requests
-	resp, err := p.streamingClient().Do(httpReq.WithContext(ctx))
+	resp, err := p.getStreamingClient().Do(httpReq.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -305,7 +305,7 @@ func (p *OpenAIProvider) StreamComplete(ctx context.Context, model string, req *
 	}
 
 	// Use streaming client (no timeout) for streaming requests
-	resp, err := p.streamingClient().Do(httpReq.WithContext(ctx))
+	resp, err := p.getStreamingClient().Do(httpReq.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
