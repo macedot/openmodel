@@ -15,6 +15,7 @@ type OpenAIProvider struct {
 	apiKey     string
 	apiMode    string
 	httpClient *http.Client
+	transport  *http.Transport // Store transport for streaming client
 }
 
 // HTTPConfig holds HTTP client configuration
@@ -48,24 +49,27 @@ func NewOpenAIProvider(name, baseURL, apiKey, apiMode string) *OpenAIProvider {
 
 // NewOpenAIProviderWithConfig creates a new OpenAI-compatible provider with custom HTTP config
 func NewOpenAIProviderWithConfig(name, baseURL, apiKey, apiMode string, httpConfig HTTPConfig) *OpenAIProvider {
+	transport := &http.Transport{
+		MaxIdleConns:        httpConfig.MaxIdleConns,
+		MaxIdleConnsPerHost: httpConfig.MaxIdleConnsPerHost,
+		IdleConnTimeout:     time.Duration(httpConfig.IdleConnTimeoutSeconds) * time.Second,
+		DialContext: (&net.Dialer{
+			Timeout: time.Duration(httpConfig.DialTimeoutSeconds) * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   time.Duration(httpConfig.TLSHandshakeTimeoutSeconds) * time.Second,
+		ResponseHeaderTimeout: time.Duration(httpConfig.ResponseHeaderTimeoutSeconds) * time.Second,
+	}
+
 	return &OpenAIProvider{
 		name:    name,
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		apiKey:  apiKey,
 		apiMode: apiMode,
 		httpClient: &http.Client{
-			Timeout: time.Duration(httpConfig.TimeoutSeconds) * time.Second,
-			Transport: &http.Transport{
-				MaxIdleConns:        httpConfig.MaxIdleConns,
-				MaxIdleConnsPerHost: httpConfig.MaxIdleConnsPerHost,
-				IdleConnTimeout:     time.Duration(httpConfig.IdleConnTimeoutSeconds) * time.Second,
-				DialContext: (&net.Dialer{
-					Timeout: time.Duration(httpConfig.DialTimeoutSeconds) * time.Second,
-				}).DialContext,
-				TLSHandshakeTimeout:   time.Duration(httpConfig.TLSHandshakeTimeoutSeconds) * time.Second,
-				ResponseHeaderTimeout: time.Duration(httpConfig.ResponseHeaderTimeoutSeconds) * time.Second,
-			},
+			Timeout:   time.Duration(httpConfig.TimeoutSeconds) * time.Second,
+			Transport: transport,
 		},
+		transport: transport,
 	}
 }
 
@@ -82,4 +86,18 @@ func (p *OpenAIProvider) BaseURL() string {
 // APIMode returns the provider's API mode ("openai" or "anthropic")
 func (p *OpenAIProvider) APIMode() string {
 	return p.apiMode
+}
+
+// streamingClient returns an HTTP client configured for streaming.
+// For streaming, we disable the client-level timeout because it applies to the
+// entire request lifecycle including reading the response body. Instead, we rely
+// on Transport-level timeouts (DialTimeout, TLSHandshakeTimeout, ResponseHeaderTimeout)
+// which only apply to connection establishment and header reception.
+// This ensures the timeout only applies to initial connection and header reception,
+// allowing the stream to continue indefinitely as long as data chunks arrive.
+func (p *OpenAIProvider) streamingClient() *http.Client {
+	return &http.Client{
+		Transport: p.transport,
+		// No Timeout - lets streaming continue indefinitely as long as data arrives
+	}
 }

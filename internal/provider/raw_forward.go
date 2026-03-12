@@ -101,7 +101,8 @@ func (p *OpenAIProvider) DoStreamRequest(ctx context.Context, endpoint string, b
 		req.Header.Set(key, value)
 	}
 
-	resp, err := p.doRequest(ctx, req)
+	// Use streaming client (no timeout) for streaming requests
+	resp, err := p.streamingClient().Do(req.WithContext(ctx))
 	if err != nil {
 		if traceFile != nil {
 			traceFile.Close()

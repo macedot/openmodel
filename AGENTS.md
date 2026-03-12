@@ -263,6 +263,8 @@ internal/
 - **Error wrapping**: Use `fmt.Errorf("context: %w", err)` for chains
 - **Request IDs**: Generate unique IDs for request tracing
 - **Rate limiting**: Token bucket per-IP with trusted proxy support
+- **Streaming Timeouts**: Streaming requests use Transport-level timeouts only (DialTimeout, TLSHandshakeTimeout, ResponseHeaderTimeout). Client-level timeout is disabled to allow indefinite streaming as long as data chunks arrive.
+
 
 ## Hot Reload
 
