@@ -1,0 +1,17 @@
+# Docker ignore file - whitelist approach
+# First ignore everything, then add only required files
+
+# Ignore everything
+*
+
+# Required for Docker build
+!go.mod
+!go.sum
+!Makefile
+!cmd/**/*.go
+!internal/**/*.go
+
+# Only include these if needed
+!openmodel.schema.json
+!openmodel.json.example
+!LICENSE
