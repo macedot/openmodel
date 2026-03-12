@@ -196,11 +196,7 @@
       "default": "info",
       "description": "Logging level"
     },
-      "type": "string",
-      "enum": ["text", "color", "json"],
-      "default": "color",
-      "description": "Log output format (color for colored terminal output)"
-    },
+
     "rate_limit": {
       "type": "object",
       "description": "Rate limiting configuration for the server",
