@@ -10,6 +10,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/macedot/openmodel/internal/config"
+	"github.com/macedot/openmodel/internal/endpoints"
 	"github.com/macedot/openmodel/internal/provider"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -416,11 +417,11 @@ func TestHandleV1ChatCompletions_MissingModel(t *testing.T) {
 	srv := &Server{config: cfg, providers: providers}
 
 	app := fiber.New()
-	app.Post("/v1/chat/completions", srv.handleV1ChatCompletions)
+	app.Post(endpoints.V1ChatCompletions, srv.handleV1ChatCompletions)
 
 	// Request without model
 	reqBody := `{"messages": [{"role": "user", "content": "hello"}]}`
-	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(reqBody))
+	req := httptest.NewRequest("POST", endpoints.V1ChatCompletions, strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := app.Test(req)
@@ -440,11 +441,11 @@ func TestHandleV1ChatCompletions_NonExistentModel(t *testing.T) {
 	srv := &Server{config: cfg, providers: providers}
 
 	app := fiber.New()
-	app.Post("/v1/chat/completions", srv.handleV1ChatCompletions)
+	app.Post(endpoints.V1ChatCompletions, srv.handleV1ChatCompletions)
 
 	// Request with non-existent model
 	reqBody := `{"model": "non-existent-model", "messages": [{"role": "user", "content": "hello"}]}`
-	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(reqBody))
+	req := httptest.NewRequest("POST", endpoints.V1ChatCompletions, strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := app.Test(req)
@@ -464,11 +465,11 @@ func TestHandleV1Messages_MissingAnthropicVersion(t *testing.T) {
 	srv := &Server{config: cfg, providers: providers}
 
 	app := fiber.New()
-	app.Post("/v1/messages", srv.handleV1Messages)
+	app.Post(endpoints.V1Messages, srv.handleV1Messages)
 
 	// Request without anthropic-version header
 	reqBody := `{"model": "claude-3", "messages": [{"role": "user", "content": "hello"}]}`
-	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(reqBody))
+	req := httptest.NewRequest("POST", endpoints.V1Messages, strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := app.Test(req)

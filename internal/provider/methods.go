@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/macedot/openmodel/internal/api/openai"
+	"github.com/macedot/openmodel/internal/endpoints"
 )
 
 // copyRequestOptions copies optional fields from src to dst.
@@ -63,7 +64,7 @@ func hasThinkingEnabled(opts *openai.ChatCompletionRequest) bool {
 
 // ListModels lists available models from the provider
 func (p *OpenAIProvider) ListModels(ctx context.Context) (*openai.ModelList, error) {
-	req, err := http.NewRequest("GET", p.baseURL+"/models", nil)
+	req, err := http.NewRequest("GET", p.baseURL+endpoints.V1Models, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -104,7 +105,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, model string, messages []open
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := p.buildRequest(ctx, body, "/chat/completions")
+	httpReq, err := p.buildRequest(ctx, body, endpoints.V1ChatCompletions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -146,7 +147,7 @@ func (p *OpenAIProvider) StreamChat(ctx context.Context, model string, messages 
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := p.buildRequest(ctx, body, "/chat/completions")
+	httpReq, err := p.buildRequest(ctx, body, endpoints.V1ChatCompletions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -210,7 +211,7 @@ func (p *OpenAIProvider) StreamChatRaw(ctx context.Context, model string, messag
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := p.buildRequest(ctx, body, "/chat/completions")
+	httpReq, err := p.buildRequest(ctx, body, endpoints.V1ChatCompletions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -266,7 +267,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, model string, req *openai
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := p.buildRequest(ctx, body, "/completions")
+	httpReq, err := p.buildRequest(ctx, body, endpoints.V1Completions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -299,7 +300,7 @@ func (p *OpenAIProvider) StreamComplete(ctx context.Context, model string, req *
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := p.buildRequest(ctx, body, "/completions")
+	httpReq, err := p.buildRequest(ctx, body, endpoints.V1Completions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -345,7 +346,7 @@ func (p *OpenAIProvider) Embed(ctx context.Context, model string, input []string
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := p.buildRequest(ctx, body, "/embeddings")
+	httpReq, err := p.buildRequest(ctx, body, endpoints.V1Embeddings)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -379,7 +380,7 @@ func (p *OpenAIProvider) Moderate(ctx context.Context, input string) (*openai.Mo
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := p.buildRequest(ctx, body, "/moderations")
+	httpReq, err := p.buildRequest(ctx, body, endpoints.V1Moderations)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

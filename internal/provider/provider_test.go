@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/macedot/openmodel/internal/api/openai"
+	"github.com/macedot/openmodel/internal/endpoints"
 )
 
 // newTestProvider creates a provider pointing to a test server
@@ -25,8 +26,8 @@ func TestListModels(t *testing.T) {
 			if r.Method != "GET" {
 				t.Errorf("expected GET request, got %s", r.Method)
 			}
-			if r.URL.Path != "/models" {
-				t.Errorf("expected /models path, got %s", r.URL.Path)
+			if r.URL.Path != "/v1/models" {
+				t.Errorf("expected /v1/models path, got %s", r.URL.Path)
 			}
 			// Check authorization header
 			auth := r.Header.Get("Authorization")
@@ -131,8 +132,8 @@ func TestChat(t *testing.T) {
 			if r.Method != "POST" {
 				t.Errorf("expected POST request, got %s", r.Method)
 			}
-			if r.URL.Path != "/chat/completions" {
-				t.Errorf("expected /chat/completions path, got %s", r.URL.Path)
+			if r.URL.Path != "/v1/chat/completions" {
+				t.Errorf("expected /v1/chat/completions path, got %s", r.URL.Path)
 			}
 
 			var req openai.ChatCompletionRequest
@@ -316,8 +317,8 @@ func TestChat(t *testing.T) {
 func TestChat_ExtraFields(t *testing.T) {
 	t.Run("extra fields passed through", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/chat/completions" {
-				t.Errorf("expected /chat/completions path, got %s", r.URL.Path)
+			if r.URL.Path != "/v1/chat/completions" {
+				t.Errorf("expected /v1/chat/completions path, got %s", r.URL.Path)
 			}
 
 			var req openai.ChatCompletionRequest
@@ -379,8 +380,8 @@ func TestChat_ExtraFields(t *testing.T) {
 func TestStreamChat(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/chat/completions" {
-				t.Errorf("expected /chat/completions path, got %s", r.URL.Path)
+			if r.URL.Path != "/v1/chat/completions" {
+				t.Errorf("expected /v1/chat/completions path, got %s", r.URL.Path)
 			}
 
 			var req openai.ChatCompletionRequest
@@ -784,8 +785,8 @@ func TestComplete(t *testing.T) {
 			if r.Method != "POST" {
 				t.Errorf("expected POST request, got %s", r.Method)
 			}
-			if r.URL.Path != "/completions" {
-				t.Errorf("expected /completions path, got %s", r.URL.Path)
+			if r.URL.Path != "/v1/completions" {
+				t.Errorf("expected /v1/completions path, got %s", r.URL.Path)
 			}
 
 			var req openai.CompletionRequest
@@ -960,8 +961,8 @@ func TestComplete(t *testing.T) {
 func TestStreamComplete(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/completions" {
-				t.Errorf("expected /completions path, got %s", r.URL.Path)
+			if r.URL.Path != "/v1/completions" {
+				t.Errorf("expected /v1/completions path, got %s", r.URL.Path)
 			}
 
 			var req openai.CompletionRequest
@@ -1290,8 +1291,8 @@ func TestEmbed(t *testing.T) {
 			if r.Method != "POST" {
 				t.Errorf("expected POST request, got %s", r.Method)
 			}
-			if r.URL.Path != "/embeddings" {
-				t.Errorf("expected /embeddings path, got %s", r.URL.Path)
+			if r.URL.Path != "/v1/embeddings" {
+				t.Errorf("expected /v1/embeddings path, got %s", r.URL.Path)
 			}
 
 			var req openai.EmbeddingRequest
@@ -1470,7 +1471,7 @@ func TestBuildRequest(t *testing.T) {
 
 		body := []byte(`{"model":"gpt-4"}`)
 		ctx := context.Background()
-		req, err := provider.buildRequest(ctx, body, "/chat/completions")
+		req, err := provider.buildRequest(ctx, body, endpoints.V1ChatCompletions)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1488,7 +1489,7 @@ func TestBuildRequest(t *testing.T) {
 
 		body := []byte(`{"model":"gpt-4"}`)
 		ctx := context.Background()
-		req, err := provider.buildRequest(ctx, body, "/chat/completions")
+		req, err := provider.buildRequest(ctx, body, endpoints.V1ChatCompletions)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1503,13 +1504,13 @@ func TestBuildRequest(t *testing.T) {
 
 		body := []byte(`{"model":"gpt-4"}`)
 		ctx := context.Background()
-		req, err := provider.buildRequest(ctx, body, "/chat/completions")
+		req, err := provider.buildRequest(ctx, body, endpoints.V1ChatCompletions)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
 		// The URL should not have double slashes
-		if !strings.Contains(req.URL.String(), "8080/chat/completions") {
+		if !strings.Contains(req.URL.String(), "8080/v1/chat/completions") {
 			t.Errorf("unexpected URL: %s", req.URL.String())
 		}
 	})
@@ -1681,8 +1682,8 @@ func TestModerate(t *testing.T) {
 			if r.Method != "POST" {
 				t.Errorf("expected POST request, got %s", r.Method)
 			}
-			if r.URL.Path != "/moderations" {
-				t.Errorf("expected /moderations path, got %s", r.URL.Path)
+			if r.URL.Path != "/v1/moderations" {
+				t.Errorf("expected /v1/moderations path, got %s", r.URL.Path)
 			}
 
 			var req openai.ModerationRequest
@@ -1788,7 +1789,7 @@ func TestDoRequestMethod(t *testing.T) {
 
 		body := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":"hello"}]}`)
 		headers := map[string]string{"X-Custom-Header": "custom-value"}
-		resp, err := provider.DoRequest(ctx, "/v1/chat/completions", body, headers)
+		resp, err := provider.DoRequest(ctx, endpoints.V1ChatCompletions, body, headers)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1820,7 +1821,7 @@ func TestDoRequestMethod(t *testing.T) {
 		ctx := context.Background()
 
 		body := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":"hello"}]}`)
-		_, err := provider.DoRequest(ctx, "/v1/chat/completions", body, nil)
+		_, err := provider.DoRequest(ctx, endpoints.V1ChatCompletions, body, nil)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -1881,7 +1882,7 @@ func TestDoStreamRequest(t *testing.T) {
 		ctx := context.Background()
 
 		body := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
-		stream, err := provider.DoStreamRequest(ctx, "/v1/chat/completions", body, nil)
+		stream, err := provider.DoStreamRequest(ctx, endpoints.V1ChatCompletions, body, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1917,7 +1918,7 @@ func TestDoStreamRequest(t *testing.T) {
 		ctx := context.Background()
 
 		body := []byte(`{"model":"gpt-4","messages":[{"role":"user","content":"hello"}],"stream":true}`)
-		_, err := provider.DoStreamRequest(ctx, "/v1/chat/completions", body, nil)
+		_, err := provider.DoStreamRequest(ctx, endpoints.V1ChatCompletions, body, nil)
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}

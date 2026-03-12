@@ -4,7 +4,10 @@ package endpoints
 // OpenAI endpoints (OpenAI-compatible API paths with /v1 prefix)
 const (
 	V1ChatCompletions = "/v1/chat/completions"
+	V1Completions     = "/v1/completions"
 	V1Models          = "/v1/models"
+	V1Embeddings      = "/v1/embeddings"
+	V1Moderations     = "/v1/moderations"
 )
 
 // Anthropic endpoints (Claude API paths)
