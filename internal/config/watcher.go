@@ -15,6 +15,7 @@ type Watcher struct {
 	callback   func(*Config, error)
 	mu         sync.RWMutex
 	stopCh     chan struct{}
+	stopOnce   sync.Once
 	running    atomic.Bool
 }
 
@@ -129,7 +130,9 @@ func (w *Watcher) Stop() {
 		return
 	}
 
-	close(w.stopCh)
+	w.stopOnce.Do(func() {
+		close(w.stopCh)
+	})
 	if w.watcher != nil {
 		w.watcher.Close()
 	}
