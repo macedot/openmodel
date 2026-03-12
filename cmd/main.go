@@ -17,7 +17,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -526,6 +528,7 @@ type benchResult struct {
 	ApiMode      string       `json:"api_mode,omitempty"`
 	URL          string       `json:"url"`
 	Endpoint     string       `json:"endpoint"`
+	StatusCode   int          `json:"status_code"`
 	Prompt       string       `json:"prompt,omitempty"`
 	Error        string       `json:"error,omitempty"`
 	Response     string       `json:"response,omitempty"`
@@ -573,6 +576,19 @@ func sanitizeBenchName(name string) string {
 	return result.String()
 }
 
+// parseStatusCodeFromError extracts HTTP status code from error message
+func parseStatusCodeFromError(errStr string) int {
+	// Error format is "request failed with status %d: ..."
+	re := regexp.MustCompile(`status (\d+)`)
+	matches := re.FindStringSubmatch(errStr)
+	if len(matches) > 1 {
+		if code, err := strconv.Atoi(matches[1]); err == nil {
+			return code
+		}
+	}
+	return 0
+}
+
 // runBenchApplication tests each configured model alias using its failover chain
 func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[string]provider.Provider, messages []openai.ChatCompletionMessage, stream bool) {
 	for _, modelName := range cfg.ModelOrder {
@@ -591,6 +607,9 @@ func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[
 				Model:    modelName,
 				Strategy: modelConfig.Strategy,
 				ApiMode:  "",
+				URL:      "",
+				Endpoint: "",
+				StatusCode: parseStatusCodeFromError(err.Error()),
 				Prompt:   strings.TrimSpace(messages[0].Content),
 				Error:    err.Error(),
 				Duration: time.Since(startTime).String(),
@@ -638,8 +657,9 @@ func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[
 					ProviderID: providerKey,
 					Strategy:   modelConfig.Strategy,
 					ApiMode:    apiMode,
-					URL:        baseURL,
+					URL:        baseURL + endpoint,
 					Endpoint:   endpoint,
+					StatusCode: parseStatusCodeFromError(benchErr.Error()),
 					Prompt:     strings.TrimSpace(messages[0].Content),
 					Error:      benchErr.Error(),
 					Duration:   duration.String(),
@@ -656,8 +676,9 @@ func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[
 				ProviderID: providerKey,
 				Strategy:   modelConfig.Strategy,
 				ApiMode:    apiMode,
-				URL:        baseURL,
+				URL:        baseURL + endpoint,
 				Endpoint:   endpoint,
+				StatusCode: http.StatusOK,
 				Prompt:     strings.TrimSpace(messages[0].Content),
 				Response:   resp.Content,
 				Duration:   duration.String(),
@@ -938,8 +959,9 @@ func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[st
 						Provider:   providerName,
 						Model:      modelName,
 						ApiMode:    apiMode,
-						URL:        baseURL,
+						URL:        baseURL + endpoint,
 						Endpoint:   endpoint,
+						StatusCode: parseStatusCodeFromError(benchErr.Error()),
 						Prompt:     strings.TrimSpace(messages[0].Content),
 						Error:      benchErr.Error(),
 						Duration:   duration.String(),
@@ -954,8 +976,9 @@ func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[st
 					Provider:   providerName,
 					Model:      modelName,
 					ApiMode:    apiMode,
-					URL:        baseURL,
+					URL:        baseURL + endpoint,
 					Endpoint:   endpoint,
+					StatusCode: http.StatusOK,
 					Prompt:     strings.TrimSpace(messages[0].Content),
 					Response:   resp.Content,
 					Duration:   duration.String(),
