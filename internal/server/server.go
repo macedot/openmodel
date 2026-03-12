@@ -202,6 +202,82 @@ func (s *Server) handleRoot(c *fiber.Ctx) error {
 	})
 }
 
+// GetConfig returns the current configuration
+func (s *Server) GetConfig() *config.Config {
+	return s.config
+}
+
+// GetProviders returns the current providers map
+func (s *Server) GetProviders() map[string]provider.Provider {
+	s.providersMu.RLock()
+	defer s.providersMu.RUnlock()
+	
+	// Return a copy to prevent external modification
+	result := make(map[string]provider.Provider, len(s.providers))
+	for k, v := range s.providers {
+		result[k] = v
+	}
+	return result
+}
+
+// ReloadConfig atomically reloads the configuration and providers
+// Returns an error if the new config is invalid (config remains unchanged)
+func (s *Server) ReloadConfig(cfg *config.Config) error {
+	// Convert config.HTTP to provider.HTTPConfig
+	httpConfig := provider.HTTPConfig{
+		TimeoutSeconds:               cfg.HTTP.TimeoutSeconds,
+		MaxIdleConns:                 cfg.HTTP.MaxIdleConns,
+		MaxIdleConnsPerHost:          cfg.HTTP.MaxIdleConnsPerHost,
+		IdleConnTimeoutSeconds:       cfg.HTTP.IdleConnTimeoutSeconds,
+		DialTimeoutSeconds:           cfg.HTTP.DialTimeoutSeconds,
+		TLSHandshakeTimeoutSeconds:   cfg.HTTP.TLSHandshakeTimeoutSeconds,
+		ResponseHeaderTimeoutSeconds: cfg.HTTP.ResponseHeaderTimeoutSeconds,
+	}
+
+	// Create new providers from the config
+	newProviders := make(map[string]provider.Provider)
+	for name, pc := range cfg.Providers {
+		newProviders[name] = provider.NewOpenAIProviderWithConfig(name, pc.URL, pc.APIKey, pc.ApiMode, httpConfig)
+	}
+
+	// Atomically swap config and providers
+	s.providersMu.Lock()
+	defer s.providersMu.Unlock()
+	
+	s.config = cfg
+	s.providers = newProviders
+
+	// Recreate rate limiter if settings changed
+	if cfg.RateLimit != nil && cfg.RateLimit.Enabled {
+		cleanupInterval := 60 * time.Second
+		if cfg.RateLimit.CleanupIntervalMs > 0 {
+			cleanupInterval = time.Duration(cfg.RateLimit.CleanupIntervalMs) * time.Millisecond
+		}
+		s.limiter = NewRateLimiterWithTrustedProxies(
+			cfg.RateLimit.RequestsPerSecond,
+			cfg.RateLimit.Burst,
+			cleanupInterval,
+			cfg.RateLimit.TrustedProxies,
+		)
+	} else {
+		s.limiter = nil
+	}
+	// Write trace file if trace level is enabled
+	applogger.TraceFile("config-reload-"+time.Now().Format("20060102-150405"), map[string]any{
+		"config_path":   cfg.GetConfigPath(),
+		"providers":      len(newProviders),
+		"models":        len(cfg.Models),
+		"rate_limit":    cfg.RateLimit != nil && cfg.RateLimit.Enabled,
+	})
+
+	applogger.Info("config_reloaded", 
+		"config_path", cfg.GetConfigPath(),
+		"providers", len(newProviders),
+		"models", len(cfg.Models))
+
+	return nil
+}
+
 // handleHealth handles GET /health
 func (s *Server) handleHealth(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{

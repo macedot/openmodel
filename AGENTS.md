@@ -264,6 +264,38 @@ internal/
 - **Request IDs**: Generate unique IDs for request tracing
 - **Rate limiting**: Token bucket per-IP with trusted proxy support
 
+## Hot Reload
+
+OpenModel supports hot reload of configuration. When the config file changes:
+
+1. **File Watcher**: Uses fsnotify to watch for config file changes
+2. **SIGHUP Signal**: Send `SIGHUP` to reload config manually
+3. **Validation**: Only valid configurations are applied
+4. **Zero Downtime**: Providers are atomically swapped without dropping requests
+
+### Example
+
+```bash
+# Edit the config
+vim ~/.config/openmodel/config.json
+
+# The server automatically reloads if the config is valid
+# Or manually reload:
+pkill -SIGHUP openmodel
+```
+
+### Trace Files
+
+When trace level logging is enabled (`log_level: "trace"`), the server writes trace files for debugging:
+
+```
+trace-config-reload-20060102-150405.json
+trace-*.json
+```
+
+These files are prefixed with `trace-` and contain detailed information about operations.
+
+
 ## Testing Patterns
 
 ### Mock Provider for Testing

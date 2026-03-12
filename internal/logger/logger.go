@@ -4,6 +4,7 @@ package logger
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,9 +17,9 @@ import (
 )
 
 var (
-	logger     *slog.Logger
-	mu         sync.RWMutex
-	level      slog.Level
+	logger *slog.Logger
+	mu     sync.RWMutex
+	level  slog.Level
 )
 
 // Level represents the logging level.
@@ -261,4 +262,26 @@ func Error(msg string, args ...any) {
 // ErrorContext logs a message at error level with context.
 func ErrorContext(ctx context.Context, msg string, args ...any) {
 	Get().ErrorContext(ctx, msg, args...)
+}
+
+// TraceFile writes a trace file with the given name suffix.
+// The file is named trace-<suffix>.json and contains JSON-encoded data.
+// This is used for debugging and is only created when trace level is enabled.
+func TraceFile(suffix string, data any) error {
+	if !IsTraceEnabled() {
+		return nil
+	}
+
+	filename := fmt.Sprintf("trace-%s.json", suffix)
+	jsonData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal trace data: %w", err)
+	}
+
+	if err := os.WriteFile(filename, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write trace file: %w", err)
+	}
+
+	Trace("trace_file_written", "filename", filename)
+	return nil
 }

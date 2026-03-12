@@ -231,19 +231,85 @@ func runServer(cfg *config.Config) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Setup config watcher for hot reload
+	configPath := cfg.GetConfigPath()
+	var watcher *config.Watcher
+	if configPath != "" {
+		watcher = config.NewWatcher(configPath, func(newCfg *config.Config) {
+			// Validate the new config
+			if err := newCfg.ValidateProviderReferences(); err != nil {
+				logger.Error("config_reload_failed: invalid provider references", "error", err)
+				return
+			}
+			if err := newCfg.ValidateDefaultModels(); err != nil {
+				logger.Error("config_reload_failed: invalid default models", "error", err)
+				return
+			}
+			if err := newCfg.ValidateApiModes(); err != nil {
+				logger.Error("config_reload_failed: invalid api_modes", "error", err)
+				return
+			}
+
+			// Reload the config in the server
+			if err := srv.ReloadConfig(newCfg); err != nil {
+				logger.Error("config_reload_failed", "error", err)
+				return
+			}
+			logger.Info("config_reloaded_successfully")
+		})
+		if err := watcher.Start(); err != nil {
+			logger.Warn("config_watcher_failed", "error", err)
+		} else {
+			logger.Info("config_watcher_started", "path", configPath)
+			defer watcher.Stop()
+		}
+	}
+
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	go func() {
-		<-sigCh
-		logger.Info("Shutting down...")
-		srv.Stop(ctx)
-		cancel()
+		for {
+			sig := <-sigCh
+			switch sig {
+			case syscall.SIGHUP:
+				logger.Info("SIGHUP_received_reloading_config")
+				if configPath != "" {
+					newCfg, err := config.Load(configPath)
+					if err != nil {
+						logger.Error("config_reload_failed", "error", err)
+						continue
+					}
+					if err := newCfg.ValidateProviderReferences(); err != nil {
+						logger.Error("config_reload_failed: invalid provider references", "error", err)
+						continue
+					}
+					if err := newCfg.ValidateDefaultModels(); err != nil {
+						logger.Error("config_reload_failed: invalid default models", "error", err)
+						continue
+					}
+					if err := newCfg.ValidateApiModes(); err != nil {
+						logger.Error("config_reload_failed: invalid api_modes", "error", err)
+						continue
+					}
+					if err := srv.ReloadConfig(newCfg); err != nil {
+						logger.Error("config_reload_failed", "error", err)
+						continue
+					}
+					logger.Info("config_reloaded_successfully")
+				}
+			case syscall.SIGINT, syscall.SIGTERM:
+				logger.Info("Shutting_down")
+				srv.Stop(ctx)
+				cancel()
+				return
+			}
+		}
 	}()
 
-	logger.Info("Starting openmodel", "host", cfg.Server.Host, "port", cfg.Server.Port)
+	logger.Info("Starting_openmodel", "host", cfg.Server.Host, "port", cfg.Server.Port)
 	if err := srv.Start(); err != nil && err != http.ErrServerClosed {
-		logger.Error("Server error", "error", err)
+		logger.Error("Server_error", "error", err)
 	}
 }
 

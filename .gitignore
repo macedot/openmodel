@@ -28,3 +28,7 @@ openmodel.json
 .openmodel_debug/
 
 **/.env
+
+# Trace files (committed for debugging)
+trace-*.json
+trace-*.json
