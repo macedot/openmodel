@@ -254,75 +254,6 @@ func TestRunModels_WithNoConfig(t *testing.T) {
 	os.Stderr = oldStderr
 }
 
-// TestRunModels_WithRealConfig tests runModels using the existing config in the environment
-// This config was verified to load successfully in TestRunTestNoConfig
-func TestRunModels_WithRealConfig(t *testing.T) {
-	t.Skip("Skipping: test depends on local config file")
-	// Use the existing config from environment - it was loaded successfully
-	// See TestRunTestNoConfig output showing the config
-	oldEnv := os.Getenv("OPENMODEL_CONFIG")
-	os.Unsetenv("OPENMODEL_CONFIG")
-	defer func() {
-		if oldEnv != "" {
-			os.Setenv("OPENMODEL_CONFIG", oldEnv)
-		}
-	}()
-
-	// Don't change HOME - use existing config
-	oldHome := os.Getenv("HOME")
-	defer func() {
-		os.Setenv("HOME", oldHome)
-	}()
-
-	// Test text output
-	oldStdout := os.Stdout
-	defer func() { os.Stdout = oldStdout }()
-
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	runModels(false)
-	w.Close()
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	output := buf.String()
-
-	// Should show available models from real config
-	if !strings.Contains(output, "Available models:") {
-		t.Errorf("Expected 'Available models:' in output, got: %s", output)
-	}
-	// Note: We don't check for specific models as they depend on user's config
-}
-
-// TestRunModels_JSONWithRealConfig tests runModels with JSON output using existing config
-func TestRunModels_JSONWithRealConfig(t *testing.T) {
-	t.Skip("Skipping: test depends on local config file")
-	oldEnv := os.Getenv("OPENMODEL_CONFIG")
-	os.Unsetenv("OPENMODEL_CONFIG")
-	defer func() {
-		if oldEnv != "" {
-			os.Setenv("OPENMODEL_CONFIG", oldEnv)
-		}
-	}()
-
-	oldStdout := os.Stdout
-	defer func() { os.Stdout = oldStdout }()
-
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	runModels(true)
-	w.Close()
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	output := buf.String()
-
-	// JSON output should contain model info
-	if !strings.Contains(output, "smart") {
-		t.Errorf("Expected 'smart' model in JSON output, got: %s", output)
-	}
-}
-
 func TestRunModels_WithValidConfig(t *testing.T) {
 	oldConfig := os.Getenv("OPENMODEL_CONFIG")
 	defer func() {
@@ -484,45 +415,6 @@ func TestRunConfig_WithValidConfig(t *testing.T) {
 	}
 }
 
-// TestRunConfig_WithRealConfig tests runConfig using the existing config in the environment
-func TestRunConfig_WithRealConfig(t *testing.T) {
-	// Load config first to get the path
-	cfg, err := config.Load("")
-	if err != nil {
-		t.Skip("config file not found, skipping test")
-	}
-	configPath := cfg.GetConfigPath()
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		t.Skip("config file not found, skipping test")
-	}
-
-	oldEnv := os.Getenv("OPENMODEL_CONFIG")
-	os.Unsetenv("OPENMODEL_CONFIG")
-	defer func() {
-		if oldEnv != "" {
-			os.Setenv("OPENMODEL_CONFIG", oldEnv)
-		}
-	}()
-
-	oldStdout := os.Stdout
-	defer func() { os.Stdout = oldStdout }()
-
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	runConfig()
-
-	w.Close()
-	var buf bytes.Buffer
-	io.Copy(&buf, r)
-	output := strings.TrimSpace(buf.String())
-
-	// Should print the config path on success
-	// The config path should end with openmodel.json
-	if !strings.HasSuffix(output, "openmodel.json") {
-		t.Errorf("Expected config path ending with openmodel.json, got: %s", output)
-	}
-}
 
 func TestPrintModelsUsage(t *testing.T) {
 	oldStderr := os.Stderr
