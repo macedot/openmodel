@@ -18,49 +18,49 @@ func TestNewRateLimiter(t *testing.T) {
 
 func TestNewRateLimiterWithTrustedProxies(t *testing.T) {
 	tests := []struct {
-		name          string
+		name           string
 		trustedProxies []string
-		expectCount   int
+		expectCount    int
 	}{
 		{
-			name:          "no trusted proxies",
+			name:           "no trusted proxies",
 			trustedProxies: nil,
-			expectCount:   0,
+			expectCount:    0,
 		},
 		{
-			name:          "empty trusted proxies",
+			name:           "empty trusted proxies",
 			trustedProxies: []string{},
-			expectCount:   0,
+			expectCount:    0,
 		},
 		{
-			name:          "single IPv4",
+			name:           "single IPv4",
 			trustedProxies: []string{"192.168.1.1"},
-			expectCount:   1,
+			expectCount:    1,
 		},
 		{
-			name:          "IPv4 CIDR",
+			name:           "IPv4 CIDR",
 			trustedProxies: []string{"192.168.1.0/24"},
-			expectCount:   1,
+			expectCount:    1,
 		},
 		{
-			name:          "multiple proxies",
+			name:           "multiple proxies",
 			trustedProxies: []string{"192.168.1.0/24", "10.0.0.1", "172.16.0.0/16"},
-			expectCount:   3,
+			expectCount:    3,
 		},
 		{
-			name:          "IPv6 address",
+			name:           "IPv6 address",
 			trustedProxies: []string{"::1"},
-			expectCount:   1,
+			expectCount:    1,
 		},
 		{
-			name:          "IPv6 CIDR",
+			name:           "IPv6 CIDR",
 			trustedProxies: []string{"2001:db8::/32"},
-			expectCount:   1,
+			expectCount:    1,
 		},
 		{
-			name:          "invalid proxy ignored",
+			name:           "invalid proxy ignored",
 			trustedProxies: []string{"not-a-valid-ip", "192.168.1.0/24"},
-			expectCount:   1,
+			expectCount:    1,
 		},
 	}
 

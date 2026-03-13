@@ -58,8 +58,8 @@ func TestValidateMessagesRequest(t *testing.T) {
 			errContains: "messages is required",
 		},
 		{
-			name: "invalid JSON",
-			data: `{invalid}`,
+			name:        "invalid JSON",
+			data:        `{invalid}`,
 			expectError: true,
 			errContains: "invalid JSON",
 		},

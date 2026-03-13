@@ -163,7 +163,6 @@ func (p *OpenAIProvider) StreamChat(ctx context.Context, model string, messages 
 		return nil, err
 	}
 
-
 	// Parse function for chat streaming
 	parseChat := func(data string) (openai.ChatCompletionResponse, error) {
 		chunk, err := openai.StreamResponseToChunk([]byte(data))

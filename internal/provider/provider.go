@@ -10,13 +10,13 @@ import (
 
 // OpenAIProvider implements Provider for OpenAI-compatible APIs
 type OpenAIProvider struct {
-	name             string
-	baseURL          string
-	apiKey           string
-	apiMode          string
-	httpClient       *http.Client
-	transport        *http.Transport // Store transport for both clients
-	cachedStreamClient *http.Client // Cached streaming client (no timeout)
+	name               string
+	baseURL            string
+	apiKey             string
+	apiMode            string
+	httpClient         *http.Client
+	transport          *http.Transport // Store transport for both clients
+	cachedStreamClient *http.Client    // Cached streaming client (no timeout)
 }
 
 // HTTPConfig holds HTTP client configuration
@@ -51,9 +51,9 @@ func NewOpenAIProvider(name, baseURL, apiKey, apiMode string) *OpenAIProvider {
 // NewOpenAIProviderWithConfig creates a new OpenAI-compatible provider with custom HTTP config
 func NewOpenAIProviderWithConfig(name, baseURL, apiKey, apiMode string, httpConfig HTTPConfig) *OpenAIProvider {
 	transport := &http.Transport{
-		MaxIdleConns:          httpConfig.MaxIdleConns,
-		MaxIdleConnsPerHost:   httpConfig.MaxIdleConnsPerHost,
-		IdleConnTimeout:       time.Duration(httpConfig.IdleConnTimeoutSeconds) * time.Second,
+		MaxIdleConns:        httpConfig.MaxIdleConns,
+		MaxIdleConnsPerHost: httpConfig.MaxIdleConnsPerHost,
+		IdleConnTimeout:     time.Duration(httpConfig.IdleConnTimeoutSeconds) * time.Second,
 		DialContext: (&net.Dialer{
 			Timeout: time.Duration(httpConfig.DialTimeoutSeconds) * time.Second,
 		}).DialContext,

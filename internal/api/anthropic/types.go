@@ -57,7 +57,7 @@ type Usage struct {
 
 // Streaming event types
 type MessageStartEvent struct {
-	Type    string          `json:"type"` // "message_start"
+	Type    string           `json:"type"` // "message_start"
 	Message MessagesResponse `json:"message"`
 }
 
@@ -100,7 +100,7 @@ type MessageStopEvent struct {
 
 // ErrorResponse represents an API error
 type ErrorResponse struct {
-	Type        string     `json:"type"` // "error"
+	Type        string      `json:"type"` // "error"
 	ErrorDetail ErrorDetail `json:"error"`
 }
 

@@ -10,12 +10,12 @@ import (
 
 // RateLimiter implements a token bucket rate limiter per IP address
 type RateLimiter struct {
-	mu            sync.RWMutex
-	buckets       map[string]*tokenBucket
-	rate          int           // requests per second
-	burst         int           // max burst size
-	cleanup       time.Duration // cleanup interval
-	lastCleanup   time.Time
+	mu             sync.RWMutex
+	buckets        map[string]*tokenBucket
+	rate           int           // requests per second
+	burst          int           // max burst size
+	cleanup        time.Duration // cleanup interval
+	lastCleanup    time.Time
 	trustedProxies []*net.IPNet // CIDR networks that are trusted to send X-Forwarded-For headers
 }
 
@@ -28,11 +28,11 @@ type tokenBucket struct {
 // NewRateLimiter creates a new rate limiter with the given rate and burst
 func NewRateLimiter(rate, burst int, cleanup time.Duration) *RateLimiter {
 	return &RateLimiter{
-		buckets:       make(map[string]*tokenBucket),
-		rate:          rate,
-		burst:         burst,
-		cleanup:       cleanup,
-		lastCleanup:   time.Now(),
+		buckets:        make(map[string]*tokenBucket),
+		rate:           rate,
+		burst:          burst,
+		cleanup:        cleanup,
+		lastCleanup:    time.Now(),
 		trustedProxies: nil,
 	}
 }
