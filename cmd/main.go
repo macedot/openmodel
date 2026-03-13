@@ -10,29 +10,14 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
-	"net/http"
+	"io"
 	"os"
-	"os/signal"
-	"regexp"
-	"sort"
-	"strconv"
 	"strings"
-	"syscall"
-	"time"
 
-	"github.com/macedot/openmodel/internal/api/anthropic"
 	"github.com/macedot/openmodel/internal/api/openai"
 	"github.com/macedot/openmodel/internal/config"
-	"github.com/macedot/openmodel/internal/endpoints"
-	"github.com/macedot/openmodel/internal/logger"
-	"github.com/macedot/openmodel/internal/provider"
-	"github.com/macedot/openmodel/internal/server"
-	"github.com/macedot/openmodel/internal/server/converters"
-	"github.com/macedot/openmodel/internal/state"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=1.0.0"
@@ -111,66 +96,6 @@ func main() {
 	}
 }
 
-// initProviders creates and initializes all configured providers
-func initProviders(cfg *config.Config) map[string]provider.Provider {
-	providers := make(map[string]provider.Provider)
-
-	// Convert config.HTTP to provider.HTTPConfig
-	httpConfig := provider.HTTPConfig{
-		TimeoutSeconds:               cfg.HTTP.TimeoutSeconds,
-		MaxIdleConns:                 cfg.HTTP.MaxIdleConns,
-		MaxIdleConnsPerHost:          cfg.HTTP.MaxIdleConnsPerHost,
-		IdleConnTimeoutSeconds:       cfg.HTTP.IdleConnTimeoutSeconds,
-		DialTimeoutSeconds:           cfg.HTTP.DialTimeoutSeconds,
-		TLSHandshakeTimeoutSeconds:   cfg.HTTP.TLSHandshakeTimeoutSeconds,
-		ResponseHeaderTimeoutSeconds: cfg.HTTP.ResponseHeaderTimeoutSeconds,
-	}
-
-	for name, pc := range cfg.Providers {
-		providers[name] = provider.NewOpenAIProviderWithConfig(name, pc.URL, pc.APIKey, pc.ApiMode, httpConfig)
-		logger.Info("Provider initialized", "name", name, "url", pc.URL, "api_mode", pc.ApiMode)
-	}
-	return providers
-}
-
-// loadAndValidateConfig loads config, initializes logger, validates, and returns cfg
-func loadAndValidateConfig(configPath string) *config.Config {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
-
-	// Initialize logger after config is loaded
-	if err := logger.Init(cfg.LogLevel, ""); err != nil {
-		log.Fatalf("Failed to initialize logger: %v", err)
-	}
-
-	// Print config path
-	logger.Info("Config loaded", "config_path", cfg.GetConfigPath())
-
-	// Print log level
-	if cfg.LogLevel != "" && cfg.LogLevel != "info" {
-		logger.Debug("Log level set", "level", cfg.LogLevel)
-	}
-
-	// Validate all provider references exist
-	if err := cfg.ValidateProviderReferences(); err != nil {
-		log.Fatalf("Configuration error:\n%v", err)
-	}
-
-	// Validate only one model is marked as default
-	if err := cfg.ValidateDefaultModels(); err != nil {
-		log.Fatalf("Configuration error: %v", err)
-	}
-
-	// Validate api_mode values
-	if err := cfg.ValidateApiModes(); err != nil {
-		log.Fatalf("Configuration error:\n%v", err)
-	}
-
-	return cfg
-}
-
 func printUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: %s [command]\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "\nCommands:\n")
@@ -206,105 +131,36 @@ func printBenchUsage(fs *flag.FlagSet) {
 
 // runServeCmd handles the serve command
 func runServeCmd(args []string) {
+	cfg, exitCode := executeServeCmd(args)
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+	runServer(cfg)
+}
+
+func executeServeCmd(args []string) (*config.Config, int) {
 	fs := newServeFlagSet()
+	fs.SetOutput(io.Discard)
 	fs.Usage = func() { printServerUsage(fs) }
 
 	if err := fs.Parse(args); err != nil {
-		os.Exit(1)
+		return nil, 1
 	}
 
 	showHelp := fs.Lookup("h").Value.(flag.Getter).Get().(bool)
 	if showHelp {
 		fs.Usage()
-		os.Exit(0)
+		return nil, 0
 	}
 
 	configPath := fs.Lookup("config").Value.String()
-	cfg := loadAndValidateConfig(configPath)
-	runServer(cfg)
-}
-
-// runServer starts the HTTP server with the given config
-func runServer(cfg *config.Config) {
-	providers := initProviders(cfg)
-
-	stateMgr := state.New(10000) // 10 second initial timeout
-	srv := server.New(cfg, providers, stateMgr, Version)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Setup config watcher for hot reload
-	configPath := cfg.GetConfigPath()
-	var watcher *config.Watcher
-	if configPath != "" {
-		watcher = config.NewWatcher(configPath, func(newCfg *config.Config, err error) {
-			if err != nil {
-				logger.Error("config_reload_failed", "error", err)
-				return
-			}
-			if err := srv.ReloadConfig(newCfg); err != nil {
-				logger.Error("config_reload_failed", "error", err)
-				return
-			}
-			logger.Info("config_reloaded_successfully")
-		})
-		if err := watcher.Start(); err != nil {
-			logger.Warn("config_watcher_failed", "error", err)
-		} else {
-			logger.Info("config_watcher_started", "path", configPath)
-			defer watcher.Stop()
-		}
+	cfg, err := loadAndValidateConfig(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return nil, 1
 	}
 
-
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
-
-	go func() {
-		for {
-			sig := <-sigCh
-			switch sig {
-			case syscall.SIGHUP:
-				logger.Info("SIGHUP_received_reloading_config")
-				if configPath != "" {
-					newCfg, err := config.Load(configPath)
-					if err != nil {
-						logger.Error("config_reload_failed", "error", err)
-						continue
-					}
-					if err := newCfg.ValidateProviderReferences(); err != nil {
-						logger.Error("config_reload_failed: invalid provider references", "error", err)
-						continue
-					}
-					if err := newCfg.ValidateDefaultModels(); err != nil {
-						logger.Error("config_reload_failed: invalid default models", "error", err)
-						continue
-					}
-					if err := newCfg.ValidateApiModes(); err != nil {
-						logger.Error("config_reload_failed: invalid api_modes", "error", err)
-						continue
-					}
-					if err := srv.ReloadConfig(newCfg); err != nil {
-						logger.Error("config_reload_failed", "error", err)
-						continue
-					}
-					logger.Info("config_reloaded_successfully")
-				}
-			case syscall.SIGINT, syscall.SIGTERM:
-				logger.Info("Shutting_down")
-				srv.Stop(ctx)
-				cancel()
-				return
-			}
-		}
-	}()
-
-	logger.Info("Starting_openmodel", "host", cfg.Server.Host, "port", cfg.Server.Port)
-	if err := srv.Start(); err != nil && err != http.ErrServerClosed {
-		logger.Error("Server_error", "error", err)
-	}
+	return cfg, 0
 }
 
 func printServerUsage(fs *flag.FlagSet) {
@@ -328,34 +184,42 @@ func printConfigUsage() {
 
 // runModelsCmd handles the models command
 func runModelsCmd(args []string) {
+	cfg, exitCode := executeModelsCmd(args)
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+	printModels(cfg)
+}
+
+func executeModelsCmd(args []string) (*config.Config, int) {
 	fs := newModelsFlagSet()
+	fs.SetOutput(io.Discard)
 	fs.Usage = func() { printModelsUsage(fs) }
 
 	if err := fs.Parse(args); err != nil {
-		os.Exit(1)
+		return nil, 1
 	}
 
-	if flag.NArg() > 0 {
-		fmt.Fprintf(os.Stderr, "Error: unexpected argument: %s\n\n", flag.Arg(0))
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "Error: unexpected argument: %s\n\n", fs.Arg(0))
 		fs.Usage()
-		os.Exit(1)
+		return nil, 1
 	}
 
 	cfg, err := config.Load("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
+		return nil, 1
 	}
 
-	printModels(cfg)
+	return cfg, 0
 }
 
 // runModels is a wrapper for backward compatibility with tests
 func runModels(_ bool) {
-	cfg, err := config.Load("")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
-		os.Exit(1)
+	cfg, exitCode := executeModelsCmd(nil)
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 	printModels(cfg)
 }
@@ -436,44 +300,62 @@ func printModels(cfg *config.Config) {
 // runConfigCmd handles the config command
 func runConfigCmd(args []string) {
 	fs := flag.NewFlagSet("config", flag.ExitOnError)
+	fs.SetOutput(io.Discard)
 	fs.Usage = func() { printConfigUsage() }
 
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
-	runConfig()
+	if err := executeConfig(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
-func runConfig() {
+func executeConfig() error {
 	cfg, err := config.Load("")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error loading config: %w", err)
 	}
 
 	configPath := cfg.GetConfigPath()
 	if configPath == "" {
-		fmt.Fprintln(os.Stderr, "Error: could not determine config path (home directory not found)")
-		os.Exit(1)
+		return fmt.Errorf("could not determine config path (home directory not found)")
 	}
 
 	// Check if config file exists
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "Error: config file not found: %s\n", configPath)
-		os.Exit(1)
+		return fmt.Errorf("config file not found: %s", configPath)
 	}
 
 	// Only print path on success
 	fmt.Println(configPath)
+	return nil
+}
+
+func runConfig() {
+	if err := executeConfig(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 // runBenchCmd handles the bench command
 func runBenchCmd(args []string) {
+	promptStr, scope, stream, model, exitCode := parseBenchArgs(args)
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+	runBench(promptStr, scope, stream, model)
+}
+
+func parseBenchArgs(args []string) (string, string, bool, string, int) {
 	fs := newBenchFlagSet()
+	fs.SetOutput(io.Discard)
 	fs.Usage = func() { printBenchUsage(fs) }
 
 	if err := fs.Parse(args); err != nil {
-		os.Exit(1)
+		return "", "", false, "", 1
 	}
 
 	promptStr := fs.Lookup("prompt").Value.String()
@@ -484,20 +366,22 @@ func runBenchCmd(args []string) {
 	if promptStr == "" {
 		fmt.Fprintf(os.Stderr, "Error: -prompt is required\n\n")
 		fs.Usage()
-		os.Exit(1)
+		return "", "", false, "", 1
 	}
-	runBench(promptStr, scope, stream, model)
+
+	return promptStr, scope, stream, model, 0
 }
 
 // runBench executes benchmark tests based on scope mode
 func runBench(promptStr, scope string, stream bool, model string) {
-	cfg := loadAndValidateConfig("")
+	cfg := mustLoadAndValidateConfig("")
 
 	// Trim prompt
 	promptStr = strings.TrimSpace(promptStr)
 
 	// Initialize providers
 	providers := initProviders(cfg)
+	benchProviders := asBenchProviderMap(providers)
 
 	// Create benchmark context
 	ctx := context.Background()
@@ -508,510 +392,17 @@ func runBench(promptStr, scope string, stream bool, model string) {
 	// Run benchmarks based on scope
 	switch scope {
 	case "application", "app":
-		runBenchApplication(ctx, cfg, providers, messages, stream, model)
+		runBenchApplication(ctx, cfg, benchProviders, messages, stream, model)
 	case "providers":
 		runBenchProviders(ctx, cfg, providers, messages, stream, model)
 	case "all":
-		runBenchApplication(ctx, cfg, providers, messages, stream, model)
+		runBenchApplication(ctx, cfg, benchProviders, messages, stream, model)
 		runBenchProviders(ctx, cfg, providers, messages, stream, model)
 	default:
 		fmt.Fprintf(os.Stderr, "Error: invalid scope '%s'. Use: application, providers, or all\n", scope)
 		os.Exit(1)
 	}
 }
-
-// benchResult holds the result of a single benchmark run
-type benchResult struct {
-	Type         string       `json:"type"`
-	Provider     string       `json:"provider"`
-	Model        string       `json:"model"`
-	ProviderID   string       `json:"provider_id,omitempty"`
-	Strategy     string       `json:"strategy,omitempty"`
-	ApiMode      string       `json:"api_mode,omitempty"`
-	URL          string       `json:"url"`
-	Endpoint     string       `json:"endpoint"`
-	StatusCode   int          `json:"status_code"`
-	Prompt       string       `json:"prompt,omitempty"`
-	Error        string       `json:"error,omitempty"`
-	Response     string       `json:"response,omitempty"`
-	Duration     string       `json:"duration"`
-	Stream       bool         `json:"stream"`
-	Tokens       *benchTokens `json:"tokens,omitempty"`
-	TokensPerSec float64      `json:"tokens_per_sec,omitempty"`
-}
-
-type benchTokens struct {
-	Prompt     int `json:"prompt"`
-	Completion int `json:"completion"`
-	Total      int `json:"total"`
-}
-
-// writeBenchResult writes a benchmark result to a JSON file
-func writeBenchResult(result benchResult) {
-	// Sanitize provider and model names for filename
-	sanitizedProvider := sanitizeBenchName(result.Provider)
-	sanitizedModel := sanitizeBenchName(result.Model)
-	sanitizedEndpoint := sanitizeBenchName(result.Endpoint)
-
-	filename := fmt.Sprintf("bench-%d-%s-%s-%s.json", time.Now().UnixNano(), sanitizedProvider, sanitizedModel, sanitizedEndpoint)
-	data, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error marshaling benchmark result: %v\n", err)
-		return
-	}
-	if err := os.WriteFile(filename, data, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing benchmark file: %v\n", err)
-	}
-}
-
-// sanitizeBenchName sanitizes names for use in filenames
-func sanitizeBenchName(name string) string {
-	var result strings.Builder
-	for _, r := range name {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			result.WriteRune(r)
-		}
-	}
-	if result.Len() == 0 {
-		return "unknown"
-	}
-	return result.String()
-}
-
-// parseStatusCodeFromError extracts HTTP status code from error message
-func parseStatusCodeFromError(errStr string) int {
-	// Error format is "request failed with status %d: ..."
-	re := regexp.MustCompile(`status (\d+)`)
-	matches := re.FindStringSubmatch(errStr)
-	if len(matches) > 1 {
-		if code, err := strconv.Atoi(matches[1]); err == nil {
-			return code
-		}
-	}
-	return 0
-}
-
-// runBenchApplication tests each configured model alias using its failover chain
-func runBenchApplication(ctx context.Context, cfg *config.Config, providers map[string]provider.Provider, messages []openai.ChatCompletionMessage, stream bool, modelFilter string) {
-	for _, modelName := range cfg.ModelOrder {
-		// Skip models not matching filter
-		if modelFilter != "" && modelFilter != modelName {
-			continue
-		}
-
-		modelConfig, exists := cfg.Models[modelName]
-		if !exists {
-			continue
-		}
-		// Get first available provider from the chain
-		prov, providerKey, providerModel, err := findFirstAvailableProvider(cfg, providers, modelConfig)
-		if err != nil {
-			startTime := time.Now()
-			result := benchResult{
-				Type:     "error",
-				Provider: modelName,
-				Model:    modelName,
-				Strategy: modelConfig.Strategy,
-				ApiMode:  "",
-				URL:      "",
-				Endpoint: "",
-				StatusCode: parseStatusCodeFromError(err.Error()),
-				Prompt:   strings.TrimSpace(messages[0].Content),
-				Error:    err.Error(),
-				Duration: time.Since(startTime).String(),
-				Stream:   stream,
-			}
-			writeBenchResult(result)
-			continue
-		}
-
-		// Get api_mode from provider
-		apiMode := prov.APIMode()
-
-		// Determine which endpoints to test based on api_mode
-		testEndpoints := getEndpointsForApiMode(apiMode)
-		baseURL := prov.BaseURL()
-
-		for _, endpoint := range testEndpoints {
-			startTime := time.Now()
-
-			logger.Info("Benchmarking model",
-				"model", modelName,
-				"provider", providerKey,
-				"url", baseURL,
-				"endpoint", endpoint,
-				"stream", stream)
-
-			var resp *benchResponse
-			var benchErr error
-
-			if endpoint == endpoints.V1ChatCompletions {
-				// OpenAI endpoint
-				resp, benchErr = benchChat(ctx, prov, providerModel, messages, stream)
-			} else {
-				// Anthropic endpoint - convert and use raw request
-				resp, benchErr = benchAnthropicEndpoint(ctx, prov, providerModel, messages, stream)
-			}
-
-			duration := time.Since(startTime)
-
-			if benchErr != nil {
-				result := benchResult{
-					Type:       "error",
-					Provider:   modelName,
-					Model:      modelName,
-					ProviderID: providerKey,
-					Strategy:   modelConfig.Strategy,
-					ApiMode:    apiMode,
-					URL:        baseURL + endpoint,
-					Endpoint:   endpoint,
-					StatusCode: parseStatusCodeFromError(benchErr.Error()),
-					Prompt:     strings.TrimSpace(messages[0].Content),
-					Error:      benchErr.Error(),
-					Duration:   duration.String(),
-					Stream:     stream,
-				}
-				writeBenchResult(result)
-				continue
-			}
-
-			result := benchResult{
-				Type:       "response",
-				Provider:   modelName,
-				Model:      modelName,
-				ProviderID: providerKey,
-				Strategy:   modelConfig.Strategy,
-				ApiMode:    apiMode,
-				URL:        baseURL + endpoint,
-				Endpoint:   endpoint,
-				StatusCode: http.StatusOK,
-				Prompt:     strings.TrimSpace(messages[0].Content),
-				Response:   resp.Content,
-				Duration:   duration.String(),
-				Stream:     stream,
-			}
-
-			if resp.TotalTokens > 0 {
-				result.Tokens = &benchTokens{
-					Prompt:     resp.PromptTokens,
-					Completion: resp.CompletionTokens,
-					Total:      resp.TotalTokens,
-				}
-				if resp.PromptTokens > 0 {
-					result.TokensPerSec = float64(resp.CompletionTokens) / duration.Seconds()
-				}
-			}
-
-			writeBenchResult(result)
-		}
-	}
-}
-
-// getEndpointsForApiMode returns the endpoints to test based on api_mode
-func getEndpointsForApiMode(apiMode string) []string {
-	switch apiMode {
-	case "openai":
-		return []string{endpoints.V1ChatCompletions}
-	case "anthropic":
-		return []string{endpoints.V1Messages}
-	default:
-		// Empty or unknown: test both endpoints
-		return []string{endpoints.V1ChatCompletions, endpoints.V1Messages}
-	}
-}
-
-// benchResponse holds the response from a benchmark chat call
-type benchResponse struct {
-	Content          string
-	PromptTokens     int
-	CompletionTokens int
-	TotalTokens      int
-}
-
-// benchChat performs a chat request, using streaming or non-streaming based on the stream flag
-func benchChat(ctx context.Context, prov provider.Provider, model string, messages []openai.ChatCompletionMessage, stream bool) (*benchResponse, error) {
-	if stream {
-		return benchChatStream(ctx, prov, model, messages)
-	}
-	return benchChatNonStream(ctx, prov, model, messages)
-}
-
-// benchChatNonStream performs a non-streaming chat request
-func benchChatNonStream(ctx context.Context, prov provider.Provider, model string, messages []openai.ChatCompletionMessage) (*benchResponse, error) {
-	resp, err := prov.Chat(ctx, model, messages, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return &benchResponse{
-		Content:          resp.Choices[0].Message.Content,
-		PromptTokens:     resp.Usage.PromptTokens,
-		CompletionTokens: resp.Usage.CompletionTokens,
-		TotalTokens:      resp.Usage.TotalTokens,
-	}, nil
-}
-
-// benchChatStream performs a streaming chat request
-func benchChatStream(ctx context.Context, prov provider.Provider, model string, messages []openai.ChatCompletionMessage) (*benchResponse, error) {
-	ch, err := prov.StreamChat(ctx, model, messages, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var content strings.Builder
-	var promptTokens, completionTokens, totalTokens int
-
-	for chunk := range ch {
-		if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-			content.WriteString(chunk.Choices[0].Delta.Content)
-		}
-		// Accumulate usage from streaming response
-		if chunk.Usage.TotalTokens > 0 {
-			promptTokens = chunk.Usage.PromptTokens
-			completionTokens = chunk.Usage.CompletionTokens
-			totalTokens = chunk.Usage.TotalTokens
-		}
-	}
-
-	return &benchResponse{
-		Content:          content.String(),
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		TotalTokens:      totalTokens,
-	}, nil
-}
-
-// benchAnthropicEndpoint performs a request using Anthropic format to /v1/messages endpoint
-func benchAnthropicEndpoint(ctx context.Context, prov provider.Provider, model string, messages []openai.ChatCompletionMessage, stream bool) (*benchResponse, error) {
-	// Convert OpenAI messages to Anthropic format
-	req := &openai.ChatCompletionRequest{
-		Model:    model,
-		Messages: messages,
-		Stream:   stream,
-	}
-	anthropicReq := anthropic.OpenAIToAnthropicRequest(req)
-
-	// Marshal the Anthropic request
-	body, err := json.Marshal(anthropicReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal Anthropic request: %w", err)
-	}
-
-	// Set headers for Anthropic API
-	headers := map[string]string{
-		converters.HeaderAnthropicVersion: converters.AnthropicAPIVersion,
-	}
-
-	if stream {
-		return benchAnthropicStream(ctx, prov, body, headers, model)
-	}
-	return benchAnthropicNonStream(ctx, prov, body, headers, model)
-}
-
-// benchAnthropicNonStream performs a non-streaming Anthropic request
-func benchAnthropicNonStream(ctx context.Context, prov provider.Provider, body []byte, headers map[string]string, model string) (*benchResponse, error) {
-	respBody, err := prov.DoRequest(ctx, endpoints.V1Messages, body, headers)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse Anthropic response
-	var anthropicResp anthropic.MessagesResponse
-	if err := json.Unmarshal(respBody, &anthropicResp); err != nil {
-		return nil, fmt.Errorf("failed to parse Anthropic response: %w", err)
-	}
-
-	// Convert to OpenAI format for consistent handling
-	openaiResp := anthropic.AnthropicToOpenAIResponse(&anthropicResp)
-
-	return &benchResponse{
-		Content:          openaiResp.Choices[0].Message.Content,
-		PromptTokens:     openaiResp.Usage.PromptTokens,
-		CompletionTokens: openaiResp.Usage.CompletionTokens,
-		TotalTokens:      openaiResp.Usage.TotalTokens,
-	}, nil
-}
-
-// benchAnthropicStream performs a streaming Anthropic request
-func benchAnthropicStream(ctx context.Context, prov provider.Provider, body []byte, headers map[string]string, model string) (*benchResponse, error) {
-	ch, err := prov.DoStreamRequest(ctx, endpoints.V1Messages, body, headers)
-	if err != nil {
-		return nil, err
-	}
-
-	var content strings.Builder
-	var promptTokens, completionTokens, totalTokens int
-
-	for line := range ch {
-		// Parse SSE line
-		lineStr := string(line)
-		if !strings.HasPrefix(lineStr, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(lineStr, "data: ")
-		if data == "" || data == "[DONE]" {
-			continue
-		}
-
-		// Parse the Anthropic event
-		var event struct {
-			Type  string `json:"type"`
-			Index int    `json:"index"`
-			Delta struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"delta"`
-			Message *anthropic.MessagesResponse `json:"message"`
-			Usage   struct {
-				InputTokens  int `json:"input_tokens"`
-				OutputTokens int `json:"output_tokens"`
-			} `json:"usage"`
-		}
-
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			continue
-		}
-
-		// Handle different event types
-		switch event.Type {
-		case "content_block_delta":
-			if event.Delta.Type == "text_delta" {
-				content.WriteString(event.Delta.Text)
-			}
-		case "message_start":
-			if event.Message != nil {
-				promptTokens = event.Message.Usage.InputTokens
-			}
-		case "message_delta":
-			completionTokens = event.Usage.OutputTokens
-		case "message_stop":
-			// Message complete
-			totalTokens = promptTokens + completionTokens
-		}
-	}
-
-	return &benchResponse{
-		Content:          content.String(),
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		TotalTokens:      totalTokens,
-	}, nil
-}
-
-// findFirstAvailableProvider returns the first provider in the chain that is available
-func findFirstAvailableProvider(cfg *config.Config, providers map[string]provider.Provider, modelConfig config.ModelConfig) (provider.Provider, string, string, error) {
-	for _, mp := range modelConfig.Providers {
-		prov, exists := providers[mp.Provider]
-		if !exists {
-			continue
-		}
-		providerKey := fmt.Sprintf("%s/%s", mp.Provider, mp.Model)
-		return prov, providerKey, mp.Model, nil
-	}
-	return nil, "", "", fmt.Errorf("no available providers")
-}
-
-// runBenchProviders tests every model on every provider individually
-func runBenchProviders(ctx context.Context, cfg *config.Config, providers map[string]provider.Provider, messages []openai.ChatCompletionMessage, stream bool, modelFilter string) {
-	// Sort provider names for consistent output
-	var providerNames []string
-	for name := range cfg.Providers {
-		providerNames = append(providerNames, name)
-	}
-	sort.Strings(providerNames)
-
-	for _, providerName := range providerNames {
-		provConfig := cfg.Providers[providerName]
-		prov, exists := providers[providerName]
-		if !exists {
-			continue
-		}
-
-		baseURL := prov.BaseURL()
-		apiMode := prov.APIMode()
-		testEndpoints := getEndpointsForApiMode(apiMode)
-
-		// Sort model names for consistent output
-		models := make([]string, len(provConfig.Models))
-		copy(models, provConfig.Models)
-		sort.Strings(models)
-
-		for _, modelName := range models {
-			// Skip models not matching filter
-			if modelFilter != "" && modelFilter != providerName+"/"+modelName && modelFilter != modelName {
-				continue
-			}
-			for _, endpoint := range testEndpoints {
-				startTime := time.Now()
-
-				logger.Info("Benchmarking provider model",
-					"provider", providerName,
-					"model", modelName,
-					"url", baseURL,
-					"endpoint", endpoint,
-					"api_mode", apiMode,
-					"stream", stream)
-
-				var resp *benchResponse
-				var benchErr error
-
-				if endpoint == endpoints.V1ChatCompletions {
-					resp, benchErr = benchChat(ctx, prov, modelName, messages, stream)
-				} else {
-					resp, benchErr = benchAnthropicEndpoint(ctx, prov, modelName, messages, stream)
-				}
-
-				duration := time.Since(startTime)
-
-				if benchErr != nil {
-					result := benchResult{
-						Type:       "error",
-						Provider:   providerName,
-						Model:      modelName,
-						ApiMode:    apiMode,
-						URL:        baseURL + endpoint,
-						Endpoint:   endpoint,
-						StatusCode: parseStatusCodeFromError(benchErr.Error()),
-						Prompt:     strings.TrimSpace(messages[0].Content),
-						Error:      benchErr.Error(),
-						Duration:   duration.String(),
-						Stream:     stream,
-					}
-					writeBenchResult(result)
-					continue
-				}
-
-				result := benchResult{
-					Type:       "response",
-					Provider:   providerName,
-					Model:      modelName,
-					ApiMode:    apiMode,
-					URL:        baseURL + endpoint,
-					Endpoint:   endpoint,
-					StatusCode: http.StatusOK,
-					Prompt:     strings.TrimSpace(messages[0].Content),
-					Response:   resp.Content,
-					Duration:   duration.String(),
-					Stream:     stream,
-				}
-
-				if resp.TotalTokens > 0 {
-					result.Tokens = &benchTokens{
-						Prompt:     resp.PromptTokens,
-						Completion: resp.CompletionTokens,
-						Total:      resp.TotalTokens,
-					}
-					if resp.PromptTokens > 0 {
-						result.TokensPerSec = float64(resp.CompletionTokens) / duration.Seconds()
-					}
-				}
-
-				writeBenchResult(result)
-			}
-		}
-	}
-}
-
 
 // formatProviders formats a slice of ModelProvider for display
 func formatProviders(providers []config.ModelProvider) string {

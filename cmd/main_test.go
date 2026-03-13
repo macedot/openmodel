@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/macedot/openmodel/internal/config"
-	"github.com/macedot/openmodel/internal/provider"
 )
 
 func TestPrintUsage(t *testing.T) {
@@ -203,14 +202,22 @@ func TestPrintVersion_Dev(t *testing.T) {
 }
 
 func TestRunServer_WithNonExistentConfigPath(t *testing.T) {
-	// Skip this test - log.Fatalf calls os.Exit which can't be caught
-	// This test verifies the error path manually by checking the config loading behavior
-	t.Skip("Skipping - log.Fatalf calls os.Exit which cannot be caught in tests")
+	_, err := loadAndValidateConfig("/nonexistent/config.json")
+	if err == nil {
+		t.Fatal("expected error for non-existent config path")
+	}
 }
 
 func TestRunServer_WithInvalidConfigFile(t *testing.T) {
-	// Skip this test - log.Fatalf calls os.Exit which can't be caught
-	t.Skip("Skipping - log.Fatalf calls os.Exit which cannot be caught in tests")
+	configPath := filepath.Join(t.TempDir(), "invalid.json")
+	if err := os.WriteFile(configPath, []byte("{invalid"), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	_, err := loadAndValidateConfig(configPath)
+	if err == nil {
+		t.Fatal("expected error for invalid config file")
+	}
 }
 
 func TestRunModels_WithNoConfig(t *testing.T) {
@@ -317,39 +324,164 @@ func TestRunModels_JSONWithRealConfig(t *testing.T) {
 }
 
 func TestRunModels_WithValidConfig(t *testing.T) {
-	// Skip - config.Load() requires schema validation from remote URL
-	// This is an integration test concern
-	t.Skip("Skipping - config.Load() requires remote schema validation")
+	oldConfig := os.Getenv("OPENMODEL_CONFIG")
+	defer func() {
+		if oldConfig != "" {
+			os.Setenv("OPENMODEL_CONFIG", oldConfig)
+		} else {
+			os.Unsetenv("OPENMODEL_CONFIG")
+		}
+	}()
+
+	configPath := filepath.Join(t.TempDir(), "openmodel.json")
+	configJSON := `{
+		"$schema": "https://raw.githubusercontent.com/macedot/openmodel/master/openmodel.schema.json",
+		"models": {
+			"smart": {
+				"providers": [{"provider": "openai", "model": "gpt-4"}]
+			}
+		},
+		"providers": {
+			"openai": {
+				"url": "https://api.openai.com",
+				"api_key": "test-key",
+				"models": ["gpt-4"]
+			}
+		}
+	}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	os.Setenv("OPENMODEL_CONFIG", configPath)
+
+	cfg, exitCode := executeModelsCmd(nil)
+	if exitCode != 0 {
+		t.Fatalf("executeModelsCmd exitCode = %d, want 0", exitCode)
+	}
+	if cfg == nil {
+		t.Fatal("expected config")
+	}
+	if _, ok := cfg.Models["smart"]; !ok {
+		t.Fatal("expected smart model in config")
+	}
 }
 
 func TestRunModels_WithJSONOutput(t *testing.T) {
-	// Skip - config.Load() requires schema validation from remote URL
-	t.Skip("Skipping - config.Load() requires remote schema validation")
+	_, exitCode := executeModelsCmd([]string{"unexpected"})
+	if exitCode != 1 {
+		t.Fatalf("executeModelsCmd exitCode = %d, want 1", exitCode)
+	}
 }
 
 func TestRunModels_WithUnexpectedArgument(t *testing.T) {
-	// Skip this test - os.Exit cannot be caught in tests
-	t.Skip("Skipping - os.Exit cannot be caught in tests")
+	_, exitCode := executeModelsCmd([]string{"unexpected"})
+	if exitCode != 1 {
+		t.Fatalf("executeModelsCmd exitCode = %d, want 1", exitCode)
+	}
 }
 
 func TestRunConfig_WithNoHomeDir(t *testing.T) {
-	// Skip this test - os.Exit cannot be caught in tests
-	t.Skip("Skipping - os.Exit cannot be caught in tests")
+	oldConfig := os.Getenv("OPENMODEL_CONFIG")
+	defer func() {
+		if oldConfig != "" {
+			os.Setenv("OPENMODEL_CONFIG", oldConfig)
+		} else {
+			os.Unsetenv("OPENMODEL_CONFIG")
+		}
+	}()
+
+	os.Unsetenv("OPENMODEL_CONFIG")
+
+	path := (&config.Config{}).GetConfigPath()
+	if path == "" {
+		t.Skip("config path resolution is unavailable in this environment")
+	}
 }
 
 func TestRunConfig_WithNonExistentConfig(t *testing.T) {
-	// Skip this test - os.Exit cannot be caught in tests
-	t.Skip("Skipping - os.Exit cannot be caught in tests")
+	oldConfig := os.Getenv("OPENMODEL_CONFIG")
+	defer func() {
+		if oldConfig != "" {
+			os.Setenv("OPENMODEL_CONFIG", oldConfig)
+		} else {
+			os.Unsetenv("OPENMODEL_CONFIG")
+		}
+	}()
+
+	os.Setenv("OPENMODEL_CONFIG", filepath.Join(t.TempDir(), "missing.json"))
+
+	err := executeConfig()
+	if err == nil {
+		t.Fatal("expected error for missing config file")
+	}
+	if !strings.Contains(err.Error(), "config file not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestRunConfig_WithInvalidConfig(t *testing.T) {
-	// Skip this test - os.Exit cannot be caught in tests
-	t.Skip("Skipping - os.Exit cannot be caught in tests")
+	oldConfig := os.Getenv("OPENMODEL_CONFIG")
+	defer func() {
+		if oldConfig != "" {
+			os.Setenv("OPENMODEL_CONFIG", oldConfig)
+		} else {
+			os.Unsetenv("OPENMODEL_CONFIG")
+		}
+	}()
+
+	configPath := filepath.Join(t.TempDir(), "invalid.json")
+	if err := os.WriteFile(configPath, []byte("{invalid"), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+	os.Setenv("OPENMODEL_CONFIG", configPath)
+
+	err := executeConfig()
+	if err == nil {
+		t.Fatal("expected error for invalid config")
+	}
+	if !strings.Contains(err.Error(), "error loading config") {
+		t.Fatalf("unexpected error: %v", err)
+	}
 }
 
 func TestRunConfig_WithValidConfig(t *testing.T) {
-	// Skip - config.Load() requires schema validation from remote URL
-	t.Skip("Skipping - config.Load() requires remote schema validation")
+	oldConfig := os.Getenv("OPENMODEL_CONFIG")
+	oldStdout := os.Stdout
+	defer func() {
+		if oldConfig != "" {
+			os.Setenv("OPENMODEL_CONFIG", oldConfig)
+		} else {
+			os.Unsetenv("OPENMODEL_CONFIG")
+		}
+		os.Stdout = oldStdout
+	}()
+
+	configPath := filepath.Join(t.TempDir(), "openmodel.json")
+	configJSON := `{
+		"$schema": "https://raw.githubusercontent.com/macedot/openmodel/master/openmodel.schema.json",
+		"providers": {},
+		"models": {}
+	}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+	os.Setenv("OPENMODEL_CONFIG", configPath)
+
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	err := executeConfig()
+	w.Close()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	if strings.TrimSpace(buf.String()) != configPath {
+		t.Fatalf("expected printed config path %q, got %q", configPath, strings.TrimSpace(buf.String()))
+	}
 }
 
 // TestRunConfig_WithRealConfig tests runConfig using the existing config in the environment
@@ -892,8 +1024,8 @@ func TestFindFirstAvailableProvider(t *testing.T) {
 			},
 			providersExist: map[string]bool{"openai": true},
 			wantErr:        false,
-			wantProvider:    "openai",
-			wantModel:       "gpt-4",
+			wantProvider:   "openai",
+			wantModel:      "gpt-4",
 		},
 		{
 			name: "second provider when first unavailable",
@@ -906,8 +1038,8 @@ func TestFindFirstAvailableProvider(t *testing.T) {
 			},
 			providersExist: map[string]bool{"ollama": true}, // openai not in map
 			wantErr:        false,
-			wantProvider:    "ollama",
-			wantModel:       "llama2",
+			wantProvider:   "ollama",
+			wantModel:      "llama2",
 		},
 		{
 			name: "no providers available",
@@ -936,14 +1068,12 @@ func TestFindFirstAvailableProvider(t *testing.T) {
 			// Build a minimal providers map
 			// Since we can't easily mock Provider interface, we use nil values
 			// The function only checks if the key exists in the map
-			providers := make(map[string]provider.Provider)
+			providers := make(benchProviderMap)
 			for name := range tt.providersExist {
 				providers[name] = nil // The function checks existence, not functionality
 			}
 
-			cfg := &config.Config{}
-
-			_, provKey, model, err := findFirstAvailableProvider(cfg, providers, tt.modelConfig)
+			_, provKey, model, err := findFirstAvailableProvider(providers, tt.modelConfig)
 
 			if tt.wantErr {
 				if err == nil {
@@ -959,6 +1089,84 @@ func TestFindFirstAvailableProvider(t *testing.T) {
 				if model != tt.wantModel {
 					t.Errorf("model = %q, want %q", model, tt.wantModel)
 				}
+			}
+		})
+	}
+}
+
+func TestGetEndpointsForAPIMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		apiMode  string
+		expected []string
+	}{
+		{
+			name:     "openai mode",
+			apiMode:  "openai",
+			expected: []string{"/v1/chat/completions"},
+		},
+		{
+			name:     "anthropic mode",
+			apiMode:  "anthropic",
+			expected: []string{"/v1/messages"},
+		},
+		{
+			name:     "unknown mode supports both",
+			apiMode:  "custom",
+			expected: []string{"/v1/chat/completions", "/v1/messages"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := getEndpointsForAPIMode(tt.apiMode)
+			if len(result) != len(tt.expected) {
+				t.Fatalf("len(result) = %d, want %d", len(result), len(tt.expected))
+			}
+			for i := range tt.expected {
+				if result[i] != tt.expected[i] {
+					t.Fatalf("result[%d] = %q, want %q", i, result[i], tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+func TestSanitizeBenchName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "keeps safe characters", input: "provider_model-1", expected: "provider_model-1"},
+		{name: "drops unsafe characters", input: "provider/model:v1", expected: "providermodelv1"},
+		{name: "empty fallback", input: "!@#$", expected: "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sanitizeBenchName(tt.input); got != tt.expected {
+				t.Fatalf("sanitizeBenchName(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseStatusCodeFromError(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int
+	}{
+		{name: "extracts status code", input: "provider failed with status 429", expected: 429},
+		{name: "missing status code", input: "provider failed", expected: 0},
+		{name: "invalid status code", input: "status abc", expected: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseStatusCodeFromError(tt.input); got != tt.expected {
+				t.Fatalf("parseStatusCodeFromError(%q) = %d, want %d", tt.input, got, tt.expected)
 			}
 		})
 	}

@@ -8,12 +8,11 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/macedot/openmodel/internal/config"
 	applogger "github.com/macedot/openmodel/internal/logger"
-	"github.com/macedot/openmodel/internal/provider"
 )
 
 // providerResult holds a provider with its metadata
 type providerResult struct {
-	provider      provider.Provider
+	provider      requestProvider
 	providerKey   string
 	providerModel string
 }
@@ -27,8 +26,9 @@ func (s *Server) handleAllProvidersFailedFiber(c *fiber.Ctx, lastErr error) {
 	requestID, _ := c.Locals("request_id").(string)
 	applogger.Error("all_providers_failed", "request_id", requestID, "error", errMsg)
 
+	cfg := s.GetConfig()
 	timeout := s.state.GetProgressiveTimeout()
-	s.state.IncrementTimeout(s.config.Thresholds.MaxTimeout)
+	s.state.IncrementTimeout(cfg.Thresholds.MaxTimeout)
 
 	c.Set("Retry-After", fmt.Sprintf("%d", timeout/1000))
 	handleError(c, errMsg, fiber.StatusServiceUnavailable)
@@ -41,8 +41,9 @@ func (s *Server) handleProviderError(providerKey string, err error, threshold in
 }
 
 // findProviderWithFailover finds an available provider for a model
-func (s *Server) findProviderWithFailover(model string, providerName string) (provider.Provider, string, string, error) {
-	modelConfig, exists := s.config.Models[model]
+func (s *Server) findProviderWithFailover(model string, providerName string) (requestProvider, string, string, error) {
+	cfg := s.GetConfig()
+	modelConfig, exists := cfg.Models[model]
 	if !exists {
 		return nil, "", "", fmt.Errorf("model %q not found", model)
 	}
@@ -53,7 +54,7 @@ func (s *Server) findProviderWithFailover(model string, providerName string) (pr
 		strategy = config.StrategyFallback
 	}
 
-	threshold := s.config.GetThresholds(providerName).FailuresBeforeSwitch
+	threshold := cfg.GetThresholds(providerName).FailuresBeforeSwitch
 
 	// Find all available providers
 	available := s.findAvailableProvidersForModel(providers, threshold)
@@ -83,6 +84,9 @@ func (s *Server) findProviderWithFailover(model string, providerName string) (pr
 
 // findAvailableProvidersForModel returns available providers for a model
 func (s *Server) findAvailableProvidersForModel(providers []config.ModelProvider, threshold int) []providerResult {
+	s.providersMu.RLock()
+	defer s.providersMu.RUnlock()
+
 	var results []providerResult
 	for _, p := range providers {
 		providerKey := formatProviderKey(p)
@@ -122,7 +126,7 @@ func (s *Server) executeWithFailoverFiber(ctx context.Context, model string, bod
 		}
 
 		triedProviders = append(triedProviders, providerKey)
-		threshold := s.config.GetThresholds(providerKey).FailuresBeforeSwitch
+		threshold := s.GetConfig().GetThresholds(providerKey).FailuresBeforeSwitch
 
 		// Log request processing
 		requestID, _ := ctx.Value("request_id").(string)

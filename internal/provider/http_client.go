@@ -36,7 +36,7 @@ func (p *OpenAIProvider) buildRequest(ctx context.Context, body []byte, path str
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
 	// Propagate request ID for distributed tracing
-	if requestID, ok := ctx.Value("request_id").(string); ok && requestID != "" {
+	if requestID := RequestIDFromContext(ctx); requestID != "" {
 		req.Header.Set("X-Request-ID", requestID)
 	}
 	return req.WithContext(ctx), nil

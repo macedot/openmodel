@@ -9,6 +9,44 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestKnownSchemaChecksum_IsPinned(t *testing.T) {
+	const schemaURL = "https://raw.githubusercontent.com/macedot/openmodel/master/openmodel.schema.json"
+
+	checksum, ok := knownSchemaChecksums[schemaURL]
+	assert.True(t, ok)
+	assert.Len(t, checksum, 64)
+	assert.NotEqual(t, "known-sha256-to-be-verified", checksum)
+}
+
+func TestConfigValidate(t *testing.T) {
+	t.Run("valid config", func(t *testing.T) {
+		cfg := &Config{
+			Providers: map[string]ProviderConfig{
+				"openai": {URL: "http://localhost:8080", ApiMode: "openai", Models: []string{"gpt-4"}},
+			},
+			Models: map[string]ModelConfig{
+				"gpt-4": {
+					Default:   true,
+					Providers: []ModelProvider{{Provider: "openai", Model: "gpt-4"}},
+				},
+			},
+		}
+
+		assert.NoError(t, cfg.Validate())
+	})
+
+	t.Run("invalid provider reference", func(t *testing.T) {
+		cfg := &Config{
+			Providers: map[string]ProviderConfig{},
+			Models: map[string]ModelConfig{
+				"gpt-4": {Providers: []ModelProvider{{Provider: "missing", Model: "gpt-4"}}},
+			},
+		}
+
+		assert.Error(t, cfg.Validate())
+	})
+}
+
 // TestDefaultConfig tests the DefaultConfig function
 func TestDefaultConfig(t *testing.T) {
 	t.Run("returns valid config with defaults", func(t *testing.T) {
@@ -62,7 +100,6 @@ func TestDefaultConfig(t *testing.T) {
 		}
 	})
 }
-
 
 // TestExpandEnvVars tests the expandEnvVars function
 func TestExpandEnvVars(t *testing.T) {
@@ -372,7 +409,6 @@ func TestGetLogLevel(t *testing.T) {
 		}
 	})
 }
-
 
 // TestGetSchemaCompiler tests the getSchemaCompiler function
 func TestGetSchemaCompiler(t *testing.T) {

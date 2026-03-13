@@ -3,7 +3,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -20,10 +19,11 @@ import (
 
 // Server represents the Fiber HTTP server
 type Server struct {
-	config      *config.Config
-	providers   map[string]provider.Provider
-	state       *state.State
-	app         *fiber.App
+	config    *config.Config
+	providers providerMap
+	state     *state.State
+	app       *fiber.App
+	// providersMu protects runtime state swapped during hot reload.
 	providersMu sync.RWMutex
 	limiter     *RateLimiter
 	version     string
@@ -33,7 +33,7 @@ type Server struct {
 func New(cfg *config.Config, providers map[string]provider.Provider, stateMgr *state.State, version string) *Server {
 	srv := &Server{
 		config:    cfg,
-		providers: providers,
+		providers: asProviderMap(providers),
 		state:     stateMgr,
 		version:   version,
 	}
@@ -74,12 +74,12 @@ func generateRequestID() string {
 // Start starts the Fiber server
 func (s *Server) Start() error {
 	s.app = fiber.New(fiber.Config{
-		ReadTimeout:    DefaultReadTimeout,
-		WriteTimeout:   DefaultWriteTimeout,
-		IdleTimeout:    DefaultIdleTimeout,
-		StrictRouting:  true,
-		CaseSensitive:  true,
-		BodyLimit:      DefaultMaxRequestBody,
+		ReadTimeout:   DefaultReadTimeout,
+		WriteTimeout:  DefaultWriteTimeout,
+		IdleTimeout:   DefaultIdleTimeout,
+		StrictRouting: true,
+		CaseSensitive: true,
+		BodyLimit:     DefaultMaxRequestBody,
 	})
 
 	// Recovery middleware
@@ -125,14 +125,15 @@ func (s *Server) Start() error {
 	})
 
 	// Rate limiting middleware
-	if s.limiter != nil {
+	if s.getLimiter() != nil {
 		s.app.Use(s.rateLimitMiddleware())
 	}
 
 	// Register routes
 	s.registerRoutes(s.app)
 
-	addr := fmt.Sprintf("%s:%d", s.config.Server.Host, s.config.Server.Port)
+	cfg := s.GetConfig()
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	applogger.Info("server_starting", "addr", addr, "version", s.version)
 	return s.app.Listen(addr)
 }
@@ -149,13 +150,14 @@ func (s *Server) Stop(ctx context.Context) error {
 // rateLimitMiddleware rate limits requests by IP
 func (s *Server) rateLimitMiddleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		if s.limiter == nil {
+		limiter := s.getLimiter()
+		if limiter == nil {
 			return c.Next()
 		}
 
 		// Get client IP with trusted proxy support
-		ip := s.limiter.GetClientIP(c.IP(), c.Get("X-Forwarded-For"), c.Get("X-Real-IP"))
-		if !s.limiter.Allow(ip) {
+		ip := limiter.GetClientIP(c.IP(), c.Get("X-Forwarded-For"), c.Get("X-Real-IP"))
+		if !limiter.Allow(ip) {
 			requestID, _ := c.Locals("request_id").(string)
 			applogger.Warn("rate_limit_exceeded", "request_id", requestID, "ip", ip)
 			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
@@ -166,18 +168,10 @@ func (s *Server) rateLimitMiddleware() fiber.Handler {
 	}
 }
 
-// extractModelFromRequest extracts the model name from request body
-func extractModelFromRequest(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-	var req struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &req); err == nil && req.Model != "" {
-		return req.Model
-	}
-	return ""
+func (s *Server) getLimiter() *RateLimiter {
+	s.providersMu.RLock()
+	defer s.providersMu.RUnlock()
+	return s.limiter
 }
 
 // registerRoutes registers all API routes
@@ -204,20 +198,16 @@ func (s *Server) handleRoot(c *fiber.Ctx) error {
 
 // GetConfig returns the current configuration
 func (s *Server) GetConfig() *config.Config {
+	s.providersMu.RLock()
+	defer s.providersMu.RUnlock()
 	return s.config
 }
 
-// GetProviders returns the current providers map
-func (s *Server) GetProviders() map[string]provider.Provider {
+// GetProviders returns a copy of the current server-facing providers map.
+func (s *Server) GetProviders() providerMap {
 	s.providersMu.RLock()
 	defer s.providersMu.RUnlock()
-	
-	// Return a copy to prevent external modification
-	result := make(map[string]provider.Provider, len(s.providers))
-	for k, v := range s.providers {
-		result[k] = v
-	}
-	return result
+	return cloneProviderMap(s.providers)
 }
 
 // ReloadConfig atomically reloads the configuration and providers
@@ -235,46 +225,48 @@ func (s *Server) ReloadConfig(cfg *config.Config) error {
 	}
 
 	// Create new providers from the config
-	newProviders := make(map[string]provider.Provider)
+	newProviders := make(providerMap)
 	for name, pc := range cfg.Providers {
 		newProviders[name] = provider.NewOpenAIProviderWithConfig(name, pc.URL, pc.APIKey, pc.ApiMode, httpConfig)
 	}
 
-	// Close old providers to release resources
-	for _, p := range s.providers {
-		if closer, ok := p.(interface{ Close() error }); ok {
-			closer.Close()
-		}
-	}
-
-	s.config = cfg
-	s.providers = newProviders
-
-	// Recreate rate limiter if settings changed
+	var newLimiter *RateLimiter
 	if cfg.RateLimit != nil && cfg.RateLimit.Enabled {
 		cleanupInterval := 60 * time.Second
 		if cfg.RateLimit.CleanupIntervalMs > 0 {
 			cleanupInterval = time.Duration(cfg.RateLimit.CleanupIntervalMs) * time.Millisecond
 		}
-		s.limiter = NewRateLimiterWithTrustedProxies(
+		newLimiter = NewRateLimiterWithTrustedProxies(
 			cfg.RateLimit.RequestsPerSecond,
 			cfg.RateLimit.Burst,
 			cleanupInterval,
 			cfg.RateLimit.TrustedProxies,
 		)
-	} else {
-		s.limiter = nil
+	}
+
+	s.providersMu.Lock()
+	oldProviders := s.providers
+	s.config = cfg
+	s.providers = newProviders
+	s.limiter = newLimiter
+	s.providersMu.Unlock()
+
+	// Close old providers to release resources after the swap.
+	for _, p := range oldProviders {
+		if err := p.Close(); err != nil {
+			applogger.Warn("provider_close_failed", "provider", p.Name(), "error", err)
+		}
 	}
 
 	// Write trace file if trace level is enabled
 	applogger.TraceFile("config-reload-"+time.Now().Format("20060102-150405"), map[string]any{
-		"config_path":   cfg.GetConfigPath(),
-		"providers":      len(newProviders),
-		"models":        len(cfg.Models),
-		"rate_limit":    cfg.RateLimit != nil && cfg.RateLimit.Enabled,
+		"config_path": cfg.GetConfigPath(),
+		"providers":   len(newProviders),
+		"models":      len(cfg.Models),
+		"rate_limit":  cfg.RateLimit != nil && cfg.RateLimit.Enabled,
 	})
 
-	applogger.Info("config_reloaded", 
+	applogger.Info("config_reloaded",
 		"config_path", cfg.GetConfigPath(),
 		"providers", len(newProviders),
 		"models", len(cfg.Models))

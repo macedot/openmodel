@@ -2,80 +2,96 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/macedot/openmodel/internal/api/openai"
 	"github.com/macedot/openmodel/internal/config"
 	"github.com/macedot/openmodel/internal/endpoints"
 	"github.com/macedot/openmodel/internal/provider"
+	"github.com/macedot/openmodel/internal/server/converters"
+	"github.com/macedot/openmodel/internal/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// mockProvider implements provider.Provider for testing
-type mockProvider struct {
-	name        string
-	doRequest   func(ctx interface{}, endpoint string, body []byte, headers map[string]string) ([]byte, error)
-	doStreamReq func(ctx interface{}, endpoint string, body []byte, headers map[string]string) (<-chan []byte, error)
+type stubProvider struct {
+	name          string
+	apiMode       string
+	closeFn       func() error
+	doRequestFn   func(ctx context.Context, endpoint string, body []byte, headers map[string]string) ([]byte, error)
+	doStreamReqFn func(ctx context.Context, endpoint string, body []byte, headers map[string]string) (<-chan []byte, error)
 }
 
-func (m *mockProvider) Name() string { return m.name }
+func (p *stubProvider) Name() string { return p.name }
 
-func (m *mockProvider) ListModels(ctx interface{}) (interface{}, error) {
+func (p *stubProvider) BaseURL() string { return "" }
+
+func (p *stubProvider) APIMode() string {
+	if p.apiMode == "" {
+		return "openai"
+	}
+	return p.apiMode
+}
+
+func (p *stubProvider) ListModels(ctx context.Context) (*openai.ModelList, error) {
 	return nil, nil
 }
 
-func (m *mockProvider) Chat(ctx interface{}, model string, messages interface{}, opts interface{}) (interface{}, error) {
+func (p *stubProvider) Chat(ctx context.Context, model string, messages []openai.ChatCompletionMessage, opts *openai.ChatCompletionRequest) (*openai.ChatCompletionResponse, error) {
 	return nil, nil
 }
 
-func (m *mockProvider) StreamChat(ctx interface{}, model string, messages interface{}, opts interface{}) (<-chan interface{}, error) {
+func (p *stubProvider) StreamChat(ctx context.Context, model string, messages []openai.ChatCompletionMessage, opts *openai.ChatCompletionRequest) (<-chan openai.ChatCompletionResponse, error) {
 	return nil, nil
 }
 
-func (m *mockProvider) StreamChatRaw(ctx interface{}, model string, messages interface{}, opts interface{}) (<-chan []byte, error) {
+func (p *stubProvider) StreamChatRaw(ctx context.Context, model string, messages []openai.ChatCompletionMessage, opts *openai.ChatCompletionRequest) (<-chan []byte, error) {
 	return nil, nil
 }
 
-func (m *mockProvider) Complete(ctx interface{}, model string, req interface{}) (interface{}, error) {
+func (p *stubProvider) Complete(ctx context.Context, model string, req *openai.CompletionRequest) (*openai.CompletionResponse, error) {
 	return nil, nil
 }
 
-func (m *mockProvider) StreamComplete(ctx interface{}, model string, req interface{}) (<-chan interface{}, error) {
+func (p *stubProvider) StreamComplete(ctx context.Context, model string, req *openai.CompletionRequest) (<-chan openai.CompletionResponse, error) {
 	return nil, nil
 }
 
-func (m *mockProvider) Embed(ctx interface{}, model string, input []string) (interface{}, error) {
+func (p *stubProvider) Embed(ctx context.Context, model string, input []string) (*openai.EmbeddingResponse, error) {
 	return nil, nil
 }
 
-func (m *mockProvider) Moderate(ctx interface{}, input string) (interface{}, error) {
+func (p *stubProvider) Moderate(ctx context.Context, input string) (*openai.ModerationResponse, error) {
 	return nil, nil
 }
 
-func (m *mockProvider) DoRequest(ctx interface{}, endpoint string, body []byte, headers map[string]string) ([]byte, error) {
-	if m.doRequest != nil {
-		return m.doRequest(ctx, endpoint, body, headers)
+func (p *stubProvider) DoRequest(ctx context.Context, endpoint string, body []byte, headers map[string]string) ([]byte, error) {
+	if p.doRequestFn != nil {
+		return p.doRequestFn(ctx, endpoint, body, headers)
 	}
 	return nil, nil
 }
 
-func (m *mockProvider) DoStreamRequest(ctx interface{}, endpoint string, body []byte, headers map[string]string) (<-chan []byte, error) {
-	if m.doStreamReq != nil {
-		return m.doStreamReq(ctx, endpoint, body, headers)
+func (p *stubProvider) DoStreamRequest(ctx context.Context, endpoint string, body []byte, headers map[string]string) (<-chan []byte, error) {
+	if p.doStreamReqFn != nil {
+		return p.doStreamReqFn(ctx, endpoint, body, headers)
 	}
 	return nil, nil
 }
 
-func (m *mockProvider) Close() error { return nil }
-
-func (m *mockProvider) BaseURL() string { return "" }
-
-func (m *mockProvider) APIMode() string { return "openai" }
+func (p *stubProvider) Close() error {
+	if p.closeFn != nil {
+		return p.closeFn()
+	}
+	return nil
+}
 
 // TestHandleError tests the error response helper
 func TestHandleError(t *testing.T) {
@@ -266,13 +282,54 @@ func TestExtractForwardHeaders(t *testing.T) {
 	}
 }
 
+func TestIsStreamingRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     []byte
+		expected bool
+	}{
+		{name: "stream true", body: []byte(`{"stream":true}`), expected: true},
+		{name: "stream false", body: []byte(`{"stream":false}`), expected: false},
+		{name: "missing stream", body: []byte(`{"model":"gpt-4"}`), expected: false},
+		{name: "invalid json", body: []byte(`{invalid}`), expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isStreamingRequest(tt.body))
+		})
+	}
+}
+
+func TestBuildRoutingPlan(t *testing.T) {
+	t.Run("passthrough openai", func(t *testing.T) {
+		plan, err := buildRoutingPlan(converters.APIFormatOpenAI, EndpointV1ChatCompletions, "openai")
+		require.NoError(t, err)
+		assert.Equal(t, EndpointV1ChatCompletions, plan.forwardEndpoint)
+		assert.Equal(t, converters.APIFormatOpenAI, plan.targetFormat)
+		assert.Nil(t, plan.converter)
+	})
+
+	t.Run("convert openai to anthropic", func(t *testing.T) {
+		plan, err := buildRoutingPlan(converters.APIFormatOpenAI, EndpointV1ChatCompletions, "anthropic")
+		require.NoError(t, err)
+		assert.Equal(t, converters.APIFormatAnthropic, plan.targetFormat)
+		assert.NotNil(t, plan.converter)
+	})
+
+	t.Run("unsupported mode", func(t *testing.T) {
+		_, err := buildRoutingPlan(converters.APIFormatOpenAI, EndpointV1ChatCompletions, "custom")
+		require.Error(t, err)
+	})
+}
+
 // TestValidateModel tests model validation
 func TestValidateModel(t *testing.T) {
 	cfg := &config.Config{
 		Models: map[string]config.ModelConfig{
-			"gpt-4":     {Strategy: "fallback"},
-			"gpt-3.5":   {Strategy: "fallback"},
-			"claude-3":  {Strategy: "fallback"},
+			"gpt-4":    {Strategy: "fallback"},
+			"gpt-3.5":  {Strategy: "fallback"},
+			"claude-3": {Strategy: "fallback"},
 		},
 	}
 
@@ -414,7 +471,7 @@ func TestHandleV1ChatCompletions_MissingModel(t *testing.T) {
 		},
 	}
 	providers := map[string]provider.Provider{}
-	srv := &Server{config: cfg, providers: providers}
+	srv := &Server{config: cfg, providers: asProviderMap(providers)}
 
 	app := fiber.New()
 	app.Post(endpoints.V1ChatCompletions, srv.handleV1ChatCompletions)
@@ -438,7 +495,7 @@ func TestHandleV1ChatCompletions_NonExistentModel(t *testing.T) {
 		},
 	}
 	providers := map[string]provider.Provider{}
-	srv := &Server{config: cfg, providers: providers}
+	srv := &Server{config: cfg, providers: asProviderMap(providers)}
 
 	app := fiber.New()
 	app.Post(endpoints.V1ChatCompletions, srv.handleV1ChatCompletions)
@@ -462,7 +519,7 @@ func TestHandleV1Messages_MissingAnthropicVersion(t *testing.T) {
 		},
 	}
 	providers := map[string]provider.Provider{}
-	srv := &Server{config: cfg, providers: providers}
+	srv := &Server{config: cfg, providers: asProviderMap(providers)}
 
 	app := fiber.New()
 	app.Post(endpoints.V1Messages, srv.handleV1Messages)
@@ -476,4 +533,64 @@ func TestHandleV1Messages_MissingAnthropicVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, fiber.StatusBadRequest, resp.StatusCode)
+}
+
+func TestHandleV1ChatCompletions_FailsOverToNextProvider(t *testing.T) {
+	cfg := &config.Config{
+		Models: map[string]config.ModelConfig{
+			"gpt-4": {
+				Strategy: "fallback",
+				Providers: []config.ModelProvider{
+					{Provider: "first", Model: "gpt-4-a"},
+					{Provider: "second", Model: "gpt-4-b"},
+				},
+			},
+		},
+		Thresholds: config.ThresholdsConfig{
+			FailuresBeforeSwitch: 1,
+			InitialTimeout:       1000,
+			MaxTimeout:           10000,
+		},
+	}
+
+	var firstCalls, secondCalls int
+	srv := &Server{
+		config: cfg,
+		providers: providerMap{
+			"first": &stubProvider{
+				name: "first",
+				doRequestFn: func(ctx context.Context, endpoint string, body []byte, headers map[string]string) ([]byte, error) {
+					firstCalls++
+					return nil, fmt.Errorf("upstream failed")
+				},
+			},
+			"second": &stubProvider{
+				name: "second",
+				doRequestFn: func(ctx context.Context, endpoint string, body []byte, headers map[string]string) ([]byte, error) {
+					secondCalls++
+					require.Equal(t, endpoints.V1ChatCompletions, endpoint)
+
+					var req map[string]any
+					require.NoError(t, json.Unmarshal(body, &req))
+					assert.Equal(t, "gpt-4-b", req["model"])
+
+					return []byte(`{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"gpt-4-b","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`), nil
+				},
+			},
+		},
+		state: state.New(1000),
+	}
+
+	app := fiber.New()
+	app.Post(endpoints.V1ChatCompletions, srv.handleV1ChatCompletions)
+
+	reqBody := `{"model":"gpt-4","messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest("POST", endpoints.V1ChatCompletions, strings.NewReader(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	assert.Equal(t, fiber.StatusOK, resp.StatusCode)
+	assert.Equal(t, 1, firstCalls)
+	assert.Equal(t, 1, secondCalls)
 }

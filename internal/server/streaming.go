@@ -41,7 +41,7 @@ func (s *Server) streamWithFailover(c *fiber.Ctx, model string, body []byte, hea
 		}
 
 		triedProviders = append(triedProviders, providerKey)
-		threshold := s.config.GetThresholds(providerKey).FailuresBeforeSwitch
+		threshold := s.GetConfig().GetThresholds(providerKey).FailuresBeforeSwitch
 
 		// Log request processing
 		applogger.Debug("PROCESSING", "request_id", requestID, "provider", providerKey, "model", model)

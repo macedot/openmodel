@@ -89,16 +89,7 @@ func (w *Watcher) handleConfigChange() {
 		return
 	}
 
-	// Validate the config
-	if err := cfg.ValidateProviderReferences(); err != nil {
-		w.callCallback(nil, err)
-		return
-	}
-	if err := cfg.ValidateDefaultModels(); err != nil {
-		w.callCallback(nil, err)
-		return
-	}
-	if err := cfg.ValidateApiModes(); err != nil {
+	if err := cfg.Validate(); err != nil {
 		w.callCallback(nil, err)
 		return
 	}

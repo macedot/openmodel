@@ -25,7 +25,7 @@ const envAllowRemoteSchemas = "OPENMODEL_ALLOW_REMOTE_SCHEMAS"
 // Known schema checksums for integrity verification
 // Maps schema URLs to their expected SHA256 checksums
 var knownSchemaChecksums = map[string]string{
-	"https://raw.githubusercontent.com/macedot/openmodel/master/openmodel.schema.json": "known-sha256-to-be-verified",
+	"https://raw.githubusercontent.com/macedot/openmodel/master/openmodel.schema.json": "62ccb4faffd88dad8f58a43f9811623a08a7584d2fa45ac7fe3b4d0560f34055",
 }
 
 // jsonErrorWithContext wraps JSON parsing errors with line number and context
@@ -87,16 +87,16 @@ func jsonUnmarshalWithLines(data []byte, v interface{}, context string) error {
 
 // Config represents the openmodel configuration
 type Config struct {
-	Server      ServerConfig              `json:"server"`
-	Providers   map[string]ProviderConfig `json:"providers"`
-	Models      map[string]ModelConfig    `json:"models"`
-	ModelOrder  []string                  `json:"-"` // Preserves order of models from config file
-	LogLevel    string                    `json:"log_level"`
-	Thresholds  ThresholdsConfig          `json:"thresholds"`
-	RateLimit   *RateLimitConfig          `json:"rate_limit,omitempty"`
-	HTTP        HTTPConfig                `json:"http,omitempty"`
-	Limits      LimitsConfig              `json:"limits,omitempty"`
-	configPath  string                    `json:"-"` // Path to config file that was loaded
+	Server     ServerConfig              `json:"server"`
+	Providers  map[string]ProviderConfig `json:"providers"`
+	Models     map[string]ModelConfig    `json:"models"`
+	ModelOrder []string                  `json:"-"` // Preserves order of models from config file
+	LogLevel   string                    `json:"log_level"`
+	Thresholds ThresholdsConfig          `json:"thresholds"`
+	RateLimit  *RateLimitConfig          `json:"rate_limit,omitempty"`
+	HTTP       HTTPConfig                `json:"http,omitempty"`
+	Limits     LimitsConfig              `json:"limits,omitempty"`
+	configPath string                    `json:"-"` // Path to config file that was loaded
 }
 
 // RateLimitConfig holds rate limiting configuration
@@ -131,9 +131,9 @@ func (c *Config) GetLimits() LimitsConfig {
 	if c.Limits.MaxRequestBodyBytes == 0 {
 		// Return defaults
 		return LimitsConfig{
-			MaxRequestBodyBytes:  1 * 1024 * 1024,  // 1MB
-			MaxResponseBodyBytes: 1 * 1024 * 1024,  // 1MB
-			MaxStreamBufferBytes: 1 * 1024 * 1024,  // 1MB
+			MaxRequestBodyBytes:  1 * 1024 * 1024, // 1MB
+			MaxResponseBodyBytes: 1 * 1024 * 1024, // 1MB
+			MaxStreamBufferBytes: 1 * 1024 * 1024, // 1MB
 		}
 	}
 	return c.Limits
@@ -142,7 +142,7 @@ func (c *Config) GetLimits() LimitsConfig {
 // ModelConfig holds configuration for a model alias
 type ModelConfig struct {
 	Strategy  string          `json:"strategy"`  // "fallback" | "round-robin" | "random", default "fallback"
-	Default   bool            `json:"default"`  // If true, this model is the default when no model is specified
+	Default   bool            `json:"default"`   // If true, this model is the default when no model is specified
 	Providers []ModelProvider `json:"providers"` // Resolved model providers
 }
 
@@ -192,9 +192,9 @@ type ServerConfig struct {
 // ProviderConfig holds provider connection settings
 type ProviderConfig struct {
 	URL        string            `json:"url"`        // Base URL for the provider (e.g., https://api.openai.com/v1)
-	APIKey     string            `json:"api_key"`   // API key (supports ${VAR} expansion)
-	ApiMode    string            `json:"api_mode"`  // API format: "openai" or "anthropic" (required)
-	Models     []string          `json:"models"`    // List of models available on this provider
+	APIKey     string            `json:"api_key"`    // API key (supports ${VAR} expansion)
+	ApiMode    string            `json:"api_mode"`   // API format: "openai" or "anthropic" (required)
+	Models     []string          `json:"models"`     // List of models available on this provider
 	Thresholds *ThresholdsConfig `json:"thresholds"` // Provider-specific thresholds (optional, defaults to global)
 }
 
@@ -472,9 +472,9 @@ func DefaultConfig() *Config {
 			ResponseHeaderTimeoutSeconds: 30,
 		},
 		Limits: LimitsConfig{
-		MaxRequestBodyBytes:  1 * 1024 * 1024, // 1MB
-			MaxResponseBodyBytes: 1 * 1024 * 1024,  // 1MB
-			MaxStreamBufferBytes: 1 * 1024 * 1024,  // 1MB
+			MaxRequestBodyBytes:  1 * 1024 * 1024, // 1MB
+			MaxResponseBodyBytes: 1 * 1024 * 1024, // 1MB
+			MaxStreamBufferBytes: 1 * 1024 * 1024, // 1MB
 		},
 	}
 }
@@ -520,6 +520,17 @@ func (c *Config) GetConfigPath() string {
 		return ""
 	}
 	return filepath.Join(homeDir, ".config", "openmodel", "openmodel.json")
+}
+
+// Validate runs the repository-level configuration validations used at startup and reload time.
+func (c *Config) Validate() error {
+	if err := c.ValidateProviderReferences(); err != nil {
+		return err
+	}
+	if err := c.ValidateDefaultModels(); err != nil {
+		return err
+	}
+	return c.ValidateApiModes()
 }
 
 // GetConfigPath returns the path to the config file (standalone function for backward compatibility)

@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
-	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,14 +18,127 @@ import (
 	"github.com/macedot/openmodel/internal/endpoints"
 )
 
+type testServer struct {
+	URL string
+	key string
+}
+
+type testResponseWriter struct {
+	header     http.Header
+	statusCode int
+	bodyWriter *io.PipeWriter
+	ready      chan struct{}
+	readyOnce  sync.Once
+}
+
+type testTransport struct{}
+
+var (
+	testServerSeq      atomic.Uint64
+	testServerRegistry sync.Map
+)
+
+func newTestServer(handler http.Handler) *testServer {
+	id := testServerSeq.Add(1)
+	key := "test-provider-" + url.PathEscape(strings.TrimSpace(time.Unix(0, int64(id)).UTC().Format("150405.000000000")))
+	if key == "" {
+		key = "test-provider"
+	}
+	testServerRegistry.Store(key, handler)
+	return &testServer{
+		URL: "http://" + key,
+		key: key,
+	}
+}
+
+func (s *testServer) Close() {
+	testServerRegistry.Delete(s.key)
+}
+
+func (w *testResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *testResponseWriter) WriteHeader(statusCode int) {
+	w.statusCode = statusCode
+	w.readyOnce.Do(func() {
+		close(w.ready)
+	})
+}
+
+func (w *testResponseWriter) Write(data []byte) (int, error) {
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	w.readyOnce.Do(func() {
+		close(w.ready)
+	})
+	return w.bodyWriter.Write(data)
+}
+
+func (w *testResponseWriter) Flush() {
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	w.readyOnce.Do(func() {
+		close(w.ready)
+	})
+}
+
+func (t *testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	handlerValue, ok := testServerRegistry.Load(req.URL.Host)
+	if !ok {
+		return nil, &url.Error{
+			Op:  req.Method,
+			URL: req.URL.String(),
+			Err: net.ErrClosed,
+		}
+	}
+
+	pr, pw := io.Pipe()
+	writer := &testResponseWriter{
+		header:     make(http.Header),
+		statusCode: http.StatusOK,
+		bodyWriter: pw,
+		ready:      make(chan struct{}),
+	}
+
+	go func() {
+		defer pw.Close()
+		handlerValue.(http.Handler).ServeHTTP(writer, req)
+		writer.readyOnce.Do(func() {
+			close(writer.ready)
+		})
+	}()
+
+	<-writer.ready
+
+	return &http.Response{
+		StatusCode: writer.statusCode,
+		Status:     http.StatusText(writer.statusCode),
+		Header:     writer.header.Clone(),
+		Body:       pr,
+		Request:    req,
+	}, nil
+}
+
 // newTestProvider creates a provider pointing to a test server
 func newTestProvider(serverURL string) *OpenAIProvider {
-	return NewOpenAIProvider("test", serverURL, "test-api-key", "openai")
+	provider := NewOpenAIProvider("test", serverURL, "test-api-key", "openai")
+	transport := &testTransport{}
+	provider.httpClient = &http.Client{
+		Transport: transport,
+		Timeout:   provider.httpClient.Timeout,
+	}
+	provider.cachedStreamClient = &http.Client{
+		Transport: transport,
+	}
+	return provider
 }
 
 func TestListModels(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "GET" {
 				t.Errorf("expected GET request, got %s", r.Method)
 			}
@@ -64,7 +180,7 @@ func TestListModels(t *testing.T) {
 	})
 
 	t.Run("error status code", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(openai.ErrorResponse{
@@ -86,7 +202,7 @@ func TestListModels(t *testing.T) {
 	})
 
 	t.Run("invalid JSON response", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte("invalid json"))
 		}))
@@ -102,7 +218,7 @@ func TestListModels(t *testing.T) {
 	})
 
 	t.Run("empty model list", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			resp := openai.ModelList{
 				Object: "list",
@@ -128,7 +244,7 @@ func TestListModels(t *testing.T) {
 
 func TestChat(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "POST" {
 				t.Errorf("expected POST request, got %s", r.Method)
 			}
@@ -197,7 +313,7 @@ func TestChat(t *testing.T) {
 	})
 
 	t.Run("with options", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req openai.ChatCompletionRequest
 			body, _ := io.ReadAll(r.Body)
 			json.Unmarshal(body, &req)
@@ -248,7 +364,7 @@ func TestChat(t *testing.T) {
 	})
 
 	t.Run("error status code", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(openai.ErrorResponse{
@@ -274,7 +390,7 @@ func TestChat(t *testing.T) {
 	})
 
 	t.Run("invalid JSON response", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte("invalid json"))
 		}))
@@ -294,7 +410,7 @@ func TestChat(t *testing.T) {
 	})
 
 	t.Run("server error", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			w.Write([]byte("service unavailable"))
 		}))
@@ -316,7 +432,7 @@ func TestChat(t *testing.T) {
 
 func TestChat_ExtraFields(t *testing.T) {
 	t.Run("extra fields passed through", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/v1/chat/completions" {
 				t.Errorf("expected /v1/chat/completions path, got %s", r.URL.Path)
 			}
@@ -379,7 +495,7 @@ func TestChat_ExtraFields(t *testing.T) {
 
 func TestStreamChat(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/v1/chat/completions" {
 				t.Errorf("expected /v1/chat/completions path, got %s", r.URL.Path)
 			}
@@ -441,7 +557,7 @@ func TestStreamChat(t *testing.T) {
 	})
 
 	t.Run("error status code", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(openai.ErrorResponse{
@@ -467,7 +583,7 @@ func TestStreamChat(t *testing.T) {
 	})
 
 	t.Run("with options", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req openai.ChatCompletionRequest
 			body, _ := io.ReadAll(r.Body)
 			json.Unmarshal(body, &req)
@@ -502,7 +618,7 @@ func TestStreamChat(t *testing.T) {
 	})
 
 	t.Run("client disconnect mid-stream", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Transfer-Encoding", "chunked")
 
@@ -555,7 +671,7 @@ func TestStreamChat(t *testing.T) {
 	})
 
 	t.Run("malformed JSON in stream chunks", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Transfer-Encoding", "chunked")
 
@@ -611,7 +727,7 @@ func TestStreamChat(t *testing.T) {
 	})
 
 	t.Run("empty stream chunks", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Transfer-Encoding", "chunked")
 
@@ -660,7 +776,7 @@ func TestStreamChat(t *testing.T) {
 	})
 
 	t.Run("partial data chunks", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Transfer-Encoding", "chunked")
 
@@ -710,7 +826,7 @@ func TestStreamChat(t *testing.T) {
 }
 
 func TestStreamChat_WithThinkingField(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req openai.ChatCompletionRequest
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &req)
@@ -781,7 +897,7 @@ func TestStreamChat_WithThinkingField(t *testing.T) {
 
 func TestComplete(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "POST" {
 				t.Errorf("expected POST request, got %s", r.Method)
 			}
@@ -847,7 +963,7 @@ func TestComplete(t *testing.T) {
 	})
 
 	t.Run("with options", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req openai.CompletionRequest
 			body, _ := io.ReadAll(r.Body)
 			json.Unmarshal(body, &req)
@@ -892,7 +1008,7 @@ func TestComplete(t *testing.T) {
 	})
 
 	t.Run("error status code", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(openai.ErrorResponse{
@@ -918,7 +1034,7 @@ func TestComplete(t *testing.T) {
 	})
 
 	t.Run("invalid JSON response", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte("invalid json"))
 		}))
@@ -938,7 +1054,7 @@ func TestComplete(t *testing.T) {
 	})
 
 	t.Run("server error", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			w.Write([]byte("service unavailable"))
 		}))
@@ -960,7 +1076,7 @@ func TestComplete(t *testing.T) {
 
 func TestStreamComplete(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/v1/completions" {
 				t.Errorf("expected /v1/completions path, got %s", r.URL.Path)
 			}
@@ -1022,7 +1138,7 @@ func TestStreamComplete(t *testing.T) {
 	})
 
 	t.Run("error status code", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(openai.ErrorResponse{
@@ -1048,7 +1164,7 @@ func TestStreamComplete(t *testing.T) {
 	})
 
 	t.Run("with options", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req openai.CompletionRequest
 			body, _ := io.ReadAll(r.Body)
 			json.Unmarshal(body, &req)
@@ -1080,7 +1196,7 @@ func TestStreamComplete(t *testing.T) {
 	})
 
 	t.Run("client disconnect mid-stream", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Transfer-Encoding", "chunked")
 
@@ -1133,7 +1249,7 @@ func TestStreamComplete(t *testing.T) {
 	})
 
 	t.Run("malformed JSON in stream chunks", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Transfer-Encoding", "chunked")
 
@@ -1187,7 +1303,7 @@ func TestStreamComplete(t *testing.T) {
 	})
 
 	t.Run("empty stream chunks", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Transfer-Encoding", "chunked")
 
@@ -1236,7 +1352,7 @@ func TestStreamComplete(t *testing.T) {
 	})
 
 	t.Run("partial data chunks", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.Header().Set("Transfer-Encoding", "chunked")
 
@@ -1287,7 +1403,7 @@ func TestStreamComplete(t *testing.T) {
 
 func TestEmbed(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "POST" {
 				t.Errorf("expected POST request, got %s", r.Method)
 			}
@@ -1356,7 +1472,7 @@ func TestEmbed(t *testing.T) {
 	})
 
 	t.Run("single input", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req openai.EmbeddingRequest
 			body, _ := io.ReadAll(r.Body)
 			json.Unmarshal(body, &req)
@@ -1398,7 +1514,7 @@ func TestEmbed(t *testing.T) {
 	})
 
 	t.Run("error status code", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(openai.ErrorResponse{
@@ -1422,7 +1538,7 @@ func TestEmbed(t *testing.T) {
 	})
 
 	t.Run("invalid JSON response", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte("invalid json"))
 		}))
@@ -1440,7 +1556,7 @@ func TestEmbed(t *testing.T) {
 	})
 
 	t.Run("server error", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			w.Write([]byte("service unavailable"))
 		}))
@@ -1518,7 +1634,7 @@ func TestBuildRequest(t *testing.T) {
 
 func TestDoRequest(t *testing.T) {
 	t.Run("context cancellation", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Simulate slow response
 			time.Sleep(200 * time.Millisecond)
 			w.WriteHeader(http.StatusOK)
@@ -1574,7 +1690,7 @@ func TestListModelsTableDriven(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tc.responseStatus)
 				w.Header().Set("Content-Type", "application/json")
 				w.Write([]byte(tc.responseBody))
@@ -1624,7 +1740,7 @@ func TestChatTableDriven(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tc.responseStatus)
 				w.Header().Set("Content-Type", "application/json")
 				w.Write([]byte(tc.responseBody))
@@ -1651,7 +1767,7 @@ func TestChatTableDriven(t *testing.T) {
 
 // BenchmarkListModels benchmarks the ListModels method
 func BenchmarkListModels(b *testing.B) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		resp := openai.ModelList{
 			Object: "list",
@@ -1678,7 +1794,7 @@ func BenchmarkListModels(b *testing.B) {
 // TestModerate tests the Moderate method
 func TestModerate(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "POST" {
 				t.Errorf("expected POST request, got %s", r.Method)
 			}
@@ -1724,7 +1840,7 @@ func TestModerate(t *testing.T) {
 	})
 
 	t.Run("error_status_code", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			json.NewEncoder(w).Encode(map[string]string{
 				"error": "bad request",
@@ -1742,7 +1858,7 @@ func TestModerate(t *testing.T) {
 	})
 
 	t.Run("invalid_JSON_response", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("invalid json"))
 		}))
@@ -1760,7 +1876,7 @@ func TestModerate(t *testing.T) {
 
 func TestDoRequestMethod(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "POST" {
 				t.Errorf("expected POST request, got %s", r.Method)
 			}
@@ -1805,7 +1921,7 @@ func TestDoRequestMethod(t *testing.T) {
 	})
 
 	t.Run("error_status_code", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(openai.ErrorResponse{
@@ -1828,7 +1944,7 @@ func TestDoRequestMethod(t *testing.T) {
 	})
 
 	t.Run("with_additional_headers", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("X-Request-ID") != "req-123" {
 				t.Errorf("expected X-Request-ID header, got %s", r.Header.Get("X-Request-ID"))
 			}
@@ -1851,7 +1967,7 @@ func TestDoRequestMethod(t *testing.T) {
 
 func TestDoStreamRequest(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "POST" {
 				t.Errorf("expected POST request, got %s", r.Method)
 			}
@@ -1902,7 +2018,7 @@ func TestDoStreamRequest(t *testing.T) {
 	})
 
 	t.Run("error_status_code", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(openai.ErrorResponse{
@@ -1925,7 +2041,7 @@ func TestDoStreamRequest(t *testing.T) {
 	})
 
 	t.Run("with_additional_headers", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get("X-Request-ID") != "req-456" {
 				t.Errorf("expected X-Request-ID header, got %s", r.Header.Get("X-Request-ID"))
 			}
@@ -1950,7 +2066,7 @@ func TestDoStreamRequest(t *testing.T) {
 	})
 
 	t.Run("context_cancellation", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/event-stream")
 			// Send one line then wait
 			w.Write([]byte("data: {\"content\":\"start\"}\n\n"))
@@ -1982,7 +2098,7 @@ func TestDoStreamRequest(t *testing.T) {
 
 // BenchmarkChat benchmarks the Chat method
 func BenchmarkChat(b *testing.B) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req openai.ChatCompletionRequest
 		body, _ := io.ReadAll(r.Body)
 		json.Unmarshal(body, &req)

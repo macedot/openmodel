@@ -16,11 +16,11 @@ import (
 // DoRequest forwards a raw request body to the provider endpoint
 func (p *OpenAIProvider) DoRequest(ctx context.Context, endpoint string, body []byte, headers map[string]string) ([]byte, error) {
 	// Get request ID and original URL from context
-	requestID := "unknown"
-	if id, ok := ctx.Value("request_id").(string); ok && id != "" {
-		requestID = id
+	requestID := RequestIDFromContext(ctx)
+	if requestID == "" {
+		requestID = "unknown"
 	}
-	originalURL, _ := ctx.Value("original_url").(string)
+	originalURL := OriginalURLFromContext(ctx)
 
 	// Create per-request trace file
 	traceFile := createTraceFileForRequest(p.name, requestID)
@@ -73,11 +73,11 @@ func (p *OpenAIProvider) DoRequest(ctx context.Context, endpoint string, body []
 // DoStreamRequest forwards a raw streaming request and returns SSE channel
 func (p *OpenAIProvider) DoStreamRequest(ctx context.Context, endpoint string, body []byte, headers map[string]string) (<-chan []byte, error) {
 	// Get request ID and original URL from context
-	requestID := "unknown"
-	if id, ok := ctx.Value("request_id").(string); ok && id != "" {
-		requestID = id
+	requestID := RequestIDFromContext(ctx)
+	if requestID == "" {
+		requestID = "unknown"
 	}
-	originalURL, _ := ctx.Value("original_url").(string)
+	originalURL := OriginalURLFromContext(ctx)
 
 	// Create per-request trace file
 	traceFile := createTraceFileForRequest(p.name, requestID)
