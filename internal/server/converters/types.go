@@ -18,7 +18,7 @@ const (
 // Anthropic API constants
 const (
 	HeaderAnthropicVersion = "anthropic-version"
-	AnthropicAPIVersion   = "2023-06-01"
+	AnthropicAPIVersion    = "2023-06-01"
 )
 
 // StreamState holds state for stream conversion
